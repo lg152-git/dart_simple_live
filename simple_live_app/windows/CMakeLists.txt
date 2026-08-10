@@ -2,6 +2,14 @@
 cmake_minimum_required(VERSION 3.14)
 project(simple_live_app LANGUAGES CXX)
 
+# ============================================================
+# 添加以下内容：解决 MSVC experimental/coroutine 废弃错误
+# ============================================================
+# 定义宏来抑制 experimental/coroutine 被废弃的错误
+# 参考：https://github.com/flutter/flutter/issues/138096
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+# ============================================================
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "simple_live_app")
