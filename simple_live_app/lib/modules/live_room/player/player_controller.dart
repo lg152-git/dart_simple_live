@@ -231,6 +231,9 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   final pip = Floating();
   StreamSubscription<PiPStatus>? _pipSubscription;
 
+  // 保存退出全屏前的窗口状态
+  bool _wasMaximizedBeforeFullScreen = false;
+
   /// 初始化一些系统状态
   void initSystem() async {
     if (Platform.isAndroid || Platform.isIOS) {
@@ -275,16 +278,19 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   void enterFullScreen() {
     fullScreenState.value = true;
     if (Platform.isAndroid || Platform.isIOS) {
-      //全屏
+      // 移动端全屏
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       if (!isVertical.value) {
         //横屏
         setLandscapeOrientation();
       }
     } else {
+      // 桌面端全屏：先退出最大化，再进入全屏
+      _ensureNotMaximizedBeforeFullScreen();
+      // 隐藏标题栏
+      windowManager.setTitleBarStyle(TitleBarStyle.hidden);
       windowManager.setFullScreen(true);
     }
-    //danmakuController?.clear();
   }
 
   /// 退出全屏
@@ -295,10 +301,43 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       setPortraitOrientation();
     } else {
       windowManager.setFullScreen(false);
+      // 恢复标题栏（小窗模式不恢复）
+      if (!smallWindowState.value) {
+        windowManager.setTitleBarStyle(TitleBarStyle.normal);
+      }
+      // 如果之前是最大化状态，恢复最大化
+      _restoreMaximizedState();
     }
     fullScreenState.value = false;
+  }
 
-    //danmakuController?.clear();
+  /// 确保窗口不是最大化状态（在进入全屏前调用）
+  void _ensureNotMaximizedBeforeFullScreen() async {
+    try {
+      if (await windowManager.isMaximized()) {
+        _wasMaximizedBeforeFullScreen = true;
+        await windowManager.unmaximize();
+        // 等待窗口状态稳定
+        await Future.delayed(const Duration(milliseconds: 100));
+      } else {
+        _wasMaximizedBeforeFullScreen = false;
+      }
+    } catch (e) {
+      Log.logPrint("退出最大化状态失败: $e");
+      _wasMaximizedBeforeFullScreen = false;
+    }
+  }
+
+  /// 恢复最大化状态（退出全屏后调用）
+  void _restoreMaximizedState() async {
+    try {
+      if (_wasMaximizedBeforeFullScreen) {
+        await windowManager.maximize();
+        _wasMaximizedBeforeFullScreen = false;
+      }
+    } catch (e) {
+      Log.logPrint("恢复最大化状态失败: $e");
+    }
   }
 
   Size? _lastWindowSize;
@@ -338,10 +377,13 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       fullScreenState.value = false;
       smallWindowState.value = false;
       windowManager.setTitleBarStyle(TitleBarStyle.normal);
-      windowManager.setSize(_lastWindowSize!);
-      windowManager.setPosition(_lastWindowPosition!);
+      if (_lastWindowSize != null) {
+        windowManager.setSize(_lastWindowSize!);
+      }
+      if (_lastWindowPosition != null) {
+        windowManager.setPosition(_lastWindowPosition!);
+      }
       windowManager.setAlwaysOnTop(false);
-      //windowManager.setAlignment(Alignment.center);
     }
   }
 
