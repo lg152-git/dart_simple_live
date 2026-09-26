@@ -225,9 +225,6 @@ class FollowUserPage extends GetView<FollowUserController> {
                 ),
               ),
               Obx(
-                () => _buildRefreshProgress(context),
-              ),
-              Obx(
                 () => _buildActiveFilterBar(context),
               ),
               Padding(
@@ -252,32 +249,6 @@ class FollowUserPage extends GetView<FollowUserController> {
                         );
                       }).toList(),
                     ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: AppStyle.edgeInsetsH8,
-                child: Obx(
-                  () => Row(
-                    children: [
-                      ChoiceChip(
-                        label: const Text("按状态"),
-                        selected: controller.groupMode.value ==
-                            FollowGroupMode.liveStatus,
-                        onSelected: (_) {
-                          controller.setGroupMode(FollowGroupMode.liveStatus);
-                        },
-                      ),
-                      AppStyle.hGap8,
-                      ChoiceChip(
-                        label: const Text("按平台"),
-                        selected: controller.groupMode.value ==
-                            FollowGroupMode.platform,
-                        onSelected: (_) {
-                          controller.setGroupMode(FollowGroupMode.platform);
-                        },
-                      ),
-                    ],
                   ),
                 ),
               ),
@@ -458,14 +429,6 @@ class FollowUserPage extends GetView<FollowUserController> {
         InputChip(
           label: const Text("仅显示开播"),
           onDeleted: () => controller.setOnlyLive(false),
-        ),
-      );
-    }
-    if (settings.followRefreshOnEnter.value) {
-      chips.add(
-        InputChip(
-          label: const Text("进页自动刷新"),
-          onDeleted: () => controller.setRefreshOnEnter(false),
         ),
       );
     }
@@ -662,54 +625,6 @@ class FollowUserPage extends GetView<FollowUserController> {
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRefreshProgress(BuildContext context) {
-    final progress = FollowService.instance.refreshProgress.value;
-    if (!progress.active) {
-      return const SizedBox.shrink();
-    }
-    final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: AppStyle.edgeInsetsH8.copyWith(top: 4, bottom: 4),
-      child: Material(
-        color: colorScheme.surfaceContainerHighest.withAlpha(
-          progress.automatic ? 180 : 220,
-        ),
-        borderRadius: AppStyle.radius8,
-        child: Padding(
-          padding: AppStyle.edgeInsetsA12,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      progress.stage,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
-                  Text("${progress.resolvedCount}/${progress.total}"),
-                ],
-              ),
-              if (progress.detail.isNotEmpty) ...[
-                AppStyle.vGap4,
-                Text(
-                  progress.detail,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-              AppStyle.vGap8,
-              LinearProgressIndicator(
-                value: progress.total > 0 ? progress.percent : null,
-                minHeight: 6,
-              ),
-            ],
           ),
         ),
       ),

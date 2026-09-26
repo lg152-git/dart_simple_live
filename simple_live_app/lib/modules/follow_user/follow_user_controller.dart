@@ -21,21 +21,14 @@ import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/desktop_multi_window_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 
-enum FollowGroupMode {
-  liveStatus,
-  platform,
-}
-
 class FollowGroupOption {
   final String id;
   final String title;
-  final String? siteId;
   final int? liveStatus;
 
   const FollowGroupOption({
     required this.id,
     required this.title,
-    this.siteId,
     this.liveStatus,
   });
 }
@@ -46,7 +39,6 @@ class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
 
-  var groupMode = FollowGroupMode.liveStatus.obs;
   var selectedGroupId = "all".obs;
   var selectedTagId = allTagId.obs;
   var searchKeyword = "".obs;
@@ -57,7 +49,7 @@ class FollowUserController extends BasePageController<FollowUser> {
   var paginationEnabled = false.obs;
   RxList<FollowUserTag> tagList = [
     FollowUserTag(id: "0", tag: "全部", userId: []),
-    FollowUserTag(id: "1", tag: "直播中", userId: []),
+    FollowUserTag(id: "1", tag: "开播中", userId: []),
     FollowUserTag(id: "2", tag: "未开播", userId: []),
   ].obs;
 
@@ -99,10 +91,10 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   void _restoreGroupSelection() {
     final settings = AppSettingsController.instance;
-    groupMode.value = settings.followGroupMode.value == "platform"
-        ? FollowGroupMode.platform
-        : FollowGroupMode.liveStatus;
-    selectedGroupId.value = settings.followSelectedGroupId.value;
+    final savedGroupId = settings.followSelectedGroupId.value;
+    selectedGroupId.value = const {"all", "live", "not_live"}.contains(savedGroupId)
+        ? savedGroupId
+        : "all";
   }
 
   @override
@@ -187,9 +179,7 @@ class FollowUserController extends BasePageController<FollowUser> {
   List<FollowUser> get currentPageTargets => list.toList();
 
   String get currentRefreshScopeKey {
-    final mode =
-        groupMode.value == FollowGroupMode.platform ? "platform" : "live";
-    return "${currentDisplayPage.value}:${selectedTagId.value}:${selectedGroupId.value}:$mode";
+    return "${currentDisplayPage.value}:${selectedTagId.value}:${selectedGroupId.value}";
   }
 
   List<FollowUserTag> get filterTagOptions => [
@@ -302,43 +292,11 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   List<FollowGroupOption> get groupOptions {
-    final options = <FollowGroupOption>[
-      const FollowGroupOption(id: "all", title: "全部"),
+    const options = <FollowGroupOption>[
+      FollowGroupOption(id: "all", title: "全部"),
+      FollowGroupOption(id: "live", title: "开播中", liveStatus: 2),
+      FollowGroupOption(id: "not_live", title: "未开播", liveStatus: 1),
     ];
-    if (groupMode.value == FollowGroupMode.liveStatus) {
-      options.addAll(const [
-        FollowGroupOption(id: "live", title: "直播中", liveStatus: 2),
-        FollowGroupOption(id: "not_live", title: "未开播", liveStatus: 1),
-      ]);
-    } else {
-      final siteIds =
-          _buildSelectedTagList().map((item) => item.siteId).toSet().toList();
-      final siteSort = Sites.supportSites.map((site) => site.id).toList();
-      siteIds.sort((a, b) {
-        final aIndex = siteSort.indexOf(a);
-        final bIndex = siteSort.indexOf(b);
-        if (aIndex < 0 && bIndex < 0) {
-          return a.compareTo(b);
-        }
-        if (aIndex < 0) {
-          return 1;
-        }
-        if (bIndex < 0) {
-          return -1;
-        }
-        return aIndex.compareTo(bIndex);
-      });
-      for (final siteId in siteIds) {
-        final site = Sites.allSites[siteId];
-        options.add(
-          FollowGroupOption(
-            id: "site:$siteId",
-            title: site?.name ?? siteId,
-            siteId: siteId,
-          ),
-        );
-      }
-    }
     return options;
   }
 
@@ -365,12 +323,6 @@ class FollowUserController extends BasePageController<FollowUser> {
           source
               .where((item) => expectedStatus.contains(item.liveStatus.value)),
         ),
-      );
-    }
-    final siteId = selected.siteId;
-    if (siteId != null) {
-      return FollowService.instance.sortFollowUsers(
-        _distinctFollowUsers(source.where((item) => item.siteId == siteId)),
       );
     }
     return FollowService.instance.sortFollowUsers(
@@ -459,26 +411,9 @@ class FollowUserController extends BasePageController<FollowUser> {
     filterData();
   }
 
-  void setGroupMode(FollowGroupMode mode) {
-    groupMode.value = mode;
-    selectedGroupId.value = "all";
-    _saveGroupSelection();
-    filterData();
-  }
-
   void setGroupOption(FollowGroupOption option) {
     selectedGroupId.value = option.id;
-    _saveGroupSelection();
     filterData();
-  }
-
-  void _saveGroupSelection() {
-    AppSettingsController.instance.setFollowGroupSelection(
-      mode: groupMode.value == FollowGroupMode.platform
-          ? "platform"
-          : "liveStatus",
-      groupId: selectedGroupId.value,
-    );
   }
 
   void removeItem(FollowUser item) async {

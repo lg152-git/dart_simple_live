@@ -356,9 +356,9 @@ class _DesktopWindowLifecycle with WindowListener {
       final maximized = await windowManager.isMaximized();
       final previousBounds =
           AppSettingsController.instance.getDesktopWindowBounds();
-      final bounds = maximized
-          ? previousBounds ?? await windowManager.getBounds()
-          : await windowManager.getBounds();
+      // 最大化时始终沿用最后一次记录的非最大化窗口尺寸，避免把最大化后的
+      // 边界当作普通尺寸保存，导致退出全屏后点还原按钮回到错误的窗口大小。
+      final bounds = maximized ? (previousBounds ?? await windowManager.getBounds()) : await windowManager.getBounds();
       await AppSettingsController.instance.setDesktopWindowPlacement(
         bounds: bounds,
         maximized: maximized,
