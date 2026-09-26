@@ -1474,7 +1474,8 @@ class LiveRoomController extends PlayerController
       _scheduleOverlayDanmaku(msg);
       return;
     } else if (msg.type == LiveMessageType.online) {
-      online.value = msg.data;
+      // 只保留 HTTP 轮询的“正在观看”数值（room_view_stats.display_value），
+      // 不再被 WebSocket 推送的 totalUser 覆盖，避免数值在两个口径间交替跳变。
     } else if (msg.type == LiveMessageType.superChat) {
       if (msg.data is! LiveSuperChatMessage) {
         return;
