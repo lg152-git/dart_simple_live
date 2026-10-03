@@ -1,4 +1,4 @@
-# main 分支定制文件清单（权威）
+﻿# main 分支定制文件清单（权威）
 
 > 本清单由 `sync-upstream.ps1` 在每次同步上游时自动维护（第 11 步）。
 > 手动新增定制文件后，下次运行同步脚本会自动补录；**删除某行 = 下次同步时该文件恢复为 master 版本**，请谨慎删除。
@@ -12,16 +12,16 @@
 
 ## 清单
 
-| 文件 | 与 master 差异行数 | 定制说明 |
+| file | diff-lines vs master | description |
 |------|------|------|
-| `simple_live_app/lib/main.dart` | 26 | 火花数值只保留 HTTP 轮询的正在观看人数；窗口生命周期定制 |
-| `simple_live_app/lib/modules/follow_user/follow_user_controller.dart` | 244 | 关注页自动刷新性能优化 |
-| `simple_live_app/lib/modules/follow_user/follow_user_page.dart` | 186 | 关注页精简状态/平台分组与进度提示 |
-| `simple_live_app/lib/modules/live_room/live_room_controller.dart` | 115 | 直播间关注列表仅显示开播中并按平台排序 |
-| `simple_live_app/lib/services/follow_service.dart` | 182 | 关注列表刷新策略定制 |
+| `simple_live_app/lib/main.dart` | 25 | 火花数值只保留 HTTP 轮询的正在观看人数；窗口生命周期定制 |
+| `simple_live_app/lib/modules/follow_user/follow_user_controller.dart` | 234 | 关注页自动刷新性能优化 |
+| `simple_live_app/lib/modules/follow_user/follow_user_page.dart` | 185 | 关注页精简状态/平台分组与进度提示 |
+| `simple_live_app/lib/modules/live_room/live_room_controller.dart` | 114 | 直播间关注列表仅显示开播中并按平台排序 |
+| `simple_live_app/lib/services/follow_service.dart` | 173 | 关注列表刷新策略定制 |
 | `simple_live_app/windows/runner/flutter_window.cpp` | 23 | 窗口创建后立即以正常尺寸显示，避免 media_kit 阻塞首帧时窗口隐藏 |
 | `simple_live_console/pubspec.lock` | 614 | console 模块依赖锁定 |
-| `simple_live_tv_app/lib/modules/live_room/live_room_controller.dart` | 14 | TV 端直播间适配 |
+| `simple_live_tv_app/lib/modules/live_room/live_room_controller.dart` | 13 | TV 端直播间适配 |
 
 ## 永久定制（不参与"取 master"策略，即使上游改了也保留 main 版本）
 
