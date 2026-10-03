@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Operating-system metadata
 # =============================================================================
 .DS_Store
@@ -88,6 +88,8 @@ images/todo/
 !README.md
 !THANKS.md
 !SETTINGS_GUIDE.md
+!FIX_LOG.md
+!main_customizations.md
 !**/README.md
 .codex/project-experience.md
 /learning/
