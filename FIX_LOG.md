@@ -78,6 +78,67 @@ powershell -ExecutionPolicy Bypass -File D:\project\simple_live\fix-integrity.ps
 
 该脚本幂等，可重复运行。若下次会话 sandbox 重新挂载导致标签复发，再跑一次即可。
 
+## 同步上游 master 的固定流程（保留 main 定制）
+
+> 2026-10-03 更新。main 与 master 在 Git 历史里**没有共同祖先**（上游曾重建过仓库），
+> 首次合并用了 `--allow-unrelated-histories`；此后两条线已建立共同祖先，正常 `git merge` 即可。
+
+### 原则
+
+- **master = 上游权威线**，跟踪 `origin/master`（上游镜像）
+- **main = 定制线**，包含自己的修改（关注页、直播间、离线 vendor 构建等）
+- 同步时：master 的新提交合入 main；**冲突按白名单解决**
+  - `main_customizations.md` 两张表并集 = 白名单，**冲突时保留 main 版本（--ours）**
+  - 白名单之外的文件 → 取 master 版本（上游权威）
+
+### 一键脚本
+
+```powershell
+# 仓库根目录执行，自动 fetch + 快进 master + merge + 白名单冲突解决 + 推送
+powershell -ExecutionPolicy Bypass -File .\sync-upstream.ps1
+
+# 只看计划，不动仓库
+powershell -ExecutionPolicy Bypass -File .\sync-upstream.ps1 -DryRun
+
+# 只本地合并，不推送
+powershell -ExecutionPolicy Bypass -File .\sync-upstream.ps1 -NoPush
+```
+
+脚本会顺带刷新 `main_customizations.md` 的差异行数，并在改动后追加一个
+`chore: refresh customization manifest` 提交。
+
+### 新增定制后怎么维护
+
+1. 在 `main` 上提交你的修改。
+2. 打开 `main_customizations.md`：
+   - 是"源码定制" → 加进 **清单** 表（写清定制说明）
+   - 是"离线/构建文件" → 加进 **永久定制** 表
+3. 下次运行 `sync-upstream.ps1` 时，该文件自动进入白名单，冲突时保留 main 版本。
+4. 想放弃某个定制（接受上游版本）：从表里删掉对应行，下次同步自动恢复 master 版。
+
+### 安全网
+
+- `main-backup` 分支（本地 + `origin/main-backup`）= 首次合并前的 main 快照
+  （`b9c7705`，含全部 16 个定制提交），出问题随时 `git reset --hard main-backup` 回滚。
+- 脚本中途失败：`git merge --abort` 即可回到执行前状态，定制不丢。
+
+### 维护记录（2026-10-03 首次同步）
+
+| 提交 | 说明 |
+|------|------|
+| `a00d7b3` | `--allow-unrelated-histories` 合并 master（c67a138）进 main |
+| `2420476` | 修正 CMakeLists 回 vendor 模式（merge 时误取 master 原版导致 7z 校验失败） |
+| `1e933c6` | 从 main-backup 找回被覆盖的 8 个定制文件 |
+| `7f1700a` | 首用 `sync-upstream.ps1` 合入 master 3d5a9f3 的 3 个新提交（TV tag / 斗鱼断流 / README） |
+
+main_customizations.md 里两张表的并集 = 白名单（冲突时保留 main 版本）：
+
+- **清单表**：源码定制（关注页 / 直播间 / 火花数值等），main 改了 master 也改了的同名文件 → 保留 main
+- **永久定制表**：离线/构建文件（vendor CMakeLists、ANGLE.7z、mpv-dev 7z、build_windows_release.bat、fix-integrity.ps1、FIX_LOG.md），**永远保留 main 版本**，上游改了也不覆盖
+
+新增定制流程：在 main 上改完提交 → 把文件加进 `main_customizations.md` 对应表 → 下次运行 `sync-upstream.ps1` 自动纳入白名单。
+放弃定制：从表里删掉该行 → 下次同步自动恢复 master 版本。
+
 ## 已验证
 
 - `flutter build windows --debug` 编译通过
