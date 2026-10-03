@@ -122,6 +122,53 @@ powershell -ExecutionPolicy Bypass -File .\sync-upstream.ps1 -NoPush
   （`b9c7705`，含全部 16 个定制提交），出问题随时 `git reset --hard main-backup` 回滚。
 - 脚本中途失败：`git merge --abort` 即可回到执行前状态，定制不丢。
 
+### 冲突解决纪律（血泪教训，必读）
+
+> 2026-10-03 首次合并时，对 20 个冲突文件全量 `git checkout --theirs`（取 master），
+> 结果覆盖了 main 侧**刻意修改过的 8 个定制文件**（follow_user / 直播间 / 火花数值 /
+> flutter_window.cpp / CMakeLists vendor 模式等），导致构建 7z 校验失败、UI 定制丢失。
+> 事后从 `main-backup` 逐个取回。**教训：绝不能再对冲突文件无脑全取 `--theirs`。**
+
+#### 判别方法：什么时候取 master（--theirs）、什么时候取 main（--ours）
+
+- **master 侧代表"上游权威"的文件**（纯业务代码、文档、依赖更新，main 没动过或动得很浅）→ 取 **master**
+- **main 侧刻意改过以适配本地/离线/私有环境的文件** → 取 **main**，包括：
+  - vendor 化构建文件（`CMakeLists.txt` 离线 7z 模式）
+  - 本地忽略规则（`.gitignore` 里 main 不忽略 vendor 7z、而 master 加了忽略行 → 取 main，否则 7z 会被忽略掉）
+  - 本地构建脚本（`build_windows_release.bat`、`fix-integrity.ps1`）
+  - 你的功能定制（follow_user 控制器、直播间关注列表、火花数值、窗口尺寸等）
+
+#### 决策流程（每个冲突文件都走一遍）
+
+```powershell
+# 1. 看 main 侧为什么改过这个文件
+git log -p master..main -- <file>     # 只显示 main 侧的改动
+# 2. 看 master 侧改了什么
+git log -p main..master -- <file>
+# 3. 判断：
+#    - main 侧是"本地离线/vendor/私有环境适配" 或 "你自己的功能定制" → 取 main（--ours）
+#    - main 侧只是"跟上游同步的浅改动"或"master 没有的东西"        → 取 master（--theirs）
+# 4. 两边都改同一处且都要 → 手工合并（git checkout --ours 后手工补 master 的更新片段）
+```
+
+#### 白名单机制（制度保障，已经固化）
+
+`sync-upstream.ps1` 不再让你手工判断每个文件：`main_customizations.md` 两张表的并集
+= 白名单，**白名单内文件冲突时自动取 main（--ours），白名单外自动取 master（--theirs）**。
+所以：
+
+- **新增定制文件时**：必须把它加进 `main_customizations.md`，否则下次同步它的冲突
+  会被脚本默认取 master（上游），你的定制就丢了。
+- **白名单覆盖不全时**：脚本会报 "N 个未解决冲突" 并列出文件，把缺的文件补录进
+  清单表后 `git merge --abort` 重跑。
+- **想放弃某定制**：从清单表删掉该行，下次同步自动取 master。
+
+#### 绝对不要做的事
+
+- ❌ 对全部冲突文件无脑 `git checkout --theirs`（会覆盖你的定制 + 本地适配）
+- ❌ 对全部冲突文件无脑 `git checkout --ours`（会丢弃上游全部更新）
+- ✅ 按白名单自动分流，白名单外的少数文件手工判断，拿不准就取 master + 手工挑拣
+
 ### 维护记录（2026-10-03 首次同步）
 
 | 提交 | 说明 |
