@@ -73,6 +73,18 @@ bool FlutterWindow::OnCreate() {
     this->Show();
   });
 
+  // Show the window immediately in normal size so the user sees the app
+  // launching; the first frame will paint into it as soon as it's ready.
+  // (Without this, the window stays hidden until the very first frame,
+  // which can appear as "no window" if media_kit or another plugin blocks
+  // frame rendering.)
+  if (auto handle = GetHandle()) {
+    ::SetWindowPos(handle, HWND_TOP, 100, 100, 1280, 720,
+                   SWP_NOZORDER | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    ::ShowWindow(handle, SW_SHOWNORMAL);
+    ::SetForegroundWindow(handle);
+  }
+
   // Flutter can complete the first frame before the "show window" callback is
   // registered. The following call ensures a frame is pending to ensure the
   // window is shown. It is a no-op if the first frame hasn't completed yet.
