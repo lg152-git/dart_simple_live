@@ -21,21 +21,14 @@ import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/desktop_multi_window_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 
-enum FollowGroupMode {
-  liveStatus,
-  platform,
-}
-
 class FollowGroupOption {
   final String id;
   final String title;
-  final String? siteId;
   final int? liveStatus;
 
   const FollowGroupOption({
     required this.id,
     required this.title,
-    this.siteId,
     this.liveStatus,
   });
 }
@@ -46,7 +39,6 @@ class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
 
-  var groupMode = FollowGroupMode.liveStatus.obs;
   var selectedGroupId = "all".obs;
   var selectedTagId = allTagId.obs;
   var searchKeyword = "".obs;
@@ -55,9 +47,11 @@ class FollowUserController extends BasePageController<FollowUser> {
   var currentDisplayPage = 1.obs;
   var totalDisplayPages = 1.obs;
   var paginationEnabled = false.obs;
+  DateTime? _lastEnterRefreshAt;
+  bool _enterRefreshInFlight = false;
   RxList<FollowUserTag> tagList = [
     FollowUserTag(id: "0", tag: "全部", userId: []),
-    FollowUserTag(id: "1", tag: "直播中", userId: []),
+    FollowUserTag(id: "1", tag: "开播中", userId: []),
     FollowUserTag(id: "2", tag: "未开播", userId: []),
   ].obs;
 
@@ -87,22 +81,53 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   Future<void> _loadInitialData() async {
     await refreshData(forceStatus: false);
-    if (AppSettingsController.instance.followRefreshOnEnter.value &&
-        FollowService.instance.followList.isNotEmpty) {
-      unawaited(
-        FollowService.instance.startUpdateStatus(force: false).then((_) {
-          filterData();
-        }),
-      );
+    await _maybeRefreshOnEnter();
+  }
+
+  Future<void> _maybeRefreshOnEnter() async {
+    final now = DateTime.now();
+    // 自动刷新现在无条件生效：只要列表非空就进页快刷，
+    // 不再查 followRefreshOnEnter 开关（该开关默认是关的，
+    // 之前会导致进页根本不刷）。
+    if (FollowService.instance.followList.isEmpty || _enterRefreshInFlight) {
+      return;
     }
+    if (_lastEnterRefreshAt != null &&
+        now.difference(_lastEnterRefreshAt!) <
+            BasePageController.refreshCooldown) {
+      return;
+    }
+    _enterRefreshInFlight = true;
+    _lastEnterRefreshAt = now;
+    try {
+      await FollowService.instance.refreshSelectedStatus(
+        FollowService.instance.buildEnterPageRefreshTargets(list.toList()),
+        // 进页是用户主动行为，force:true 绕过 30 秒全局冷却，
+        // 确保每次进页都能立即刷状态。
+        force: true,
+        scope: FollowRefreshScope.page(
+          scopeKey: FollowService.instance.buildPageRefreshScopeKey(
+            currentRefreshScopeKey,
+          ),
+        ),
+        allowDetailRefresh: false,
+        // 进页快刷：并发提到 4，只查开播状态不拉详情，
+        // 让直播中的主播尽快出现。
+        statusConcurrency: 4,
+        statusOnly: true,
+      );
+      // 封面/标题/开播时间等详情由后台静默补齐，不挡进页体验。
+      unawaited(FollowService.instance.refreshEnterPageDetails());
+    } finally {
+      _enterRefreshInFlight = false;
+    }
+    filterData();
   }
 
   void _restoreGroupSelection() {
-    final settings = AppSettingsController.instance;
-    groupMode.value = settings.followGroupMode.value == "platform"
-        ? FollowGroupMode.platform
-        : FollowGroupMode.liveStatus;
-    selectedGroupId.value = settings.followSelectedGroupId.value;
+    // 分组默认"全部"：不再恢复上次持久化的"开播中/未开播"，
+    // 每次进页都是"全部"，避免用户要往下滚找未开播的主播。
+    selectedGroupId.value = "all";
   }
 
   @override
@@ -187,23 +212,27 @@ class FollowUserController extends BasePageController<FollowUser> {
   List<FollowUser> get currentPageTargets => list.toList();
 
   String get currentRefreshScopeKey {
-    final mode =
-        groupMode.value == FollowGroupMode.platform ? "platform" : "live";
-    return "${currentDisplayPage.value}:${selectedTagId.value}:${selectedGroupId.value}:$mode";
+    return "${currentDisplayPage.value}:${selectedTagId.value}:${selectedGroupId.value}";
   }
 
-  List<FollowUserTag> get filterTagOptions => [
-        tagList.firstWhere(
-          (tag) => tag.id == allTagId,
-          orElse: () => tagList.first,
-        ),
-        ...userTagList,
-      ];
+  // 标签行只返回用户自定义标签，"全部"按钮已删掉；
+  // 选中"全部"（allTagId）时由 selectedTagOption 回退到不选标签。
+  List<FollowUserTag> get filterTagOptions => userTagList.toList();
 
-  FollowUserTag get selectedTagOption => filterTagOptions.firstWhere(
-        (tag) => tag.id == selectedTagId.value,
-        orElse: () => filterTagOptions.first,
-      );
+  FollowUserTag get selectedTagOption {
+    final matched = filterTagOptions
+        .where((tag) => tag.id == selectedTagId.value)
+        .firstOrNull;
+    if (matched != null) {
+      return matched;
+    }
+    // "全部"（allTagId）不再作为可选项；选中它时回退到不选标签。
+    final allTag = tagList.firstWhere(
+      (tag) => tag.id == allTagId,
+      orElse: () => tagList.first,
+    );
+    return allTag;
+  }
 
   String get selectedTagName => selectedTagOption.tag;
 
@@ -302,43 +331,11 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   List<FollowGroupOption> get groupOptions {
-    final options = <FollowGroupOption>[
-      const FollowGroupOption(id: "all", title: "全部"),
+    const options = <FollowGroupOption>[
+      FollowGroupOption(id: "all", title: "全部"),
+      FollowGroupOption(id: "live", title: "开播中", liveStatus: 2),
+      FollowGroupOption(id: "not_live", title: "未开播", liveStatus: 1),
     ];
-    if (groupMode.value == FollowGroupMode.liveStatus) {
-      options.addAll(const [
-        FollowGroupOption(id: "live", title: "直播中", liveStatus: 2),
-        FollowGroupOption(id: "not_live", title: "未开播", liveStatus: 1),
-      ]);
-    } else {
-      final siteIds =
-          _buildSelectedTagList().map((item) => item.siteId).toSet().toList();
-      final siteSort = Sites.supportSites.map((site) => site.id).toList();
-      siteIds.sort((a, b) {
-        final aIndex = siteSort.indexOf(a);
-        final bIndex = siteSort.indexOf(b);
-        if (aIndex < 0 && bIndex < 0) {
-          return a.compareTo(b);
-        }
-        if (aIndex < 0) {
-          return 1;
-        }
-        if (bIndex < 0) {
-          return -1;
-        }
-        return aIndex.compareTo(bIndex);
-      });
-      for (final siteId in siteIds) {
-        final site = Sites.allSites[siteId];
-        options.add(
-          FollowGroupOption(
-            id: "site:$siteId",
-            title: site?.name ?? siteId,
-            siteId: siteId,
-          ),
-        );
-      }
-    }
     return options;
   }
 
@@ -365,12 +362,6 @@ class FollowUserController extends BasePageController<FollowUser> {
           source
               .where((item) => expectedStatus.contains(item.liveStatus.value)),
         ),
-      );
-    }
-    final siteId = selected.siteId;
-    if (siteId != null) {
-      return FollowService.instance.sortFollowUsers(
-        _distinctFollowUsers(source.where((item) => item.siteId == siteId)),
       );
     }
     return FollowService.instance.sortFollowUsers(
@@ -459,26 +450,9 @@ class FollowUserController extends BasePageController<FollowUser> {
     filterData();
   }
 
-  void setGroupMode(FollowGroupMode mode) {
-    groupMode.value = mode;
-    selectedGroupId.value = "all";
-    _saveGroupSelection();
-    filterData();
-  }
-
   void setGroupOption(FollowGroupOption option) {
     selectedGroupId.value = option.id;
-    _saveGroupSelection();
     filterData();
-  }
-
-  void _saveGroupSelection() {
-    AppSettingsController.instance.setFollowGroupSelection(
-      mode: groupMode.value == FollowGroupMode.platform
-          ? "platform"
-          : "liveStatus",
-      groupId: selectedGroupId.value,
-    );
   }
 
   void removeItem(FollowUser item) async {

@@ -225,59 +225,38 @@ class FollowUserPage extends GetView<FollowUserController> {
                 ),
               ),
               Obx(
-                () => _buildRefreshProgress(context),
-              ),
-              Obx(
                 () => _buildActiveFilterBar(context),
               ),
-              Padding(
-                padding: AppStyle.edgeInsetsH8.copyWith(top: 4),
-                child: Text(
-                  "标签",
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
-              ),
-              Padding(
-                padding: AppStyle.edgeInsetsA8.copyWith(top: 4),
-                child: Obx(
-                  () => SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Wrap(
-                      spacing: 12,
-                      children: controller.filterTagOptions.map((tag) {
-                        return FilterButton(
-                          text: tag.tag,
-                          selected: controller.selectedTagId.value == tag.id,
-                          onTap: () => controller.setSelectedTag(tag),
-                        );
-                      }).toList(),
+              Obx(
+                () => Visibility(
+                  visible: controller.filterTagOptions.isNotEmpty,
+                  child: Padding(
+                    padding: AppStyle.edgeInsetsH8.copyWith(top: 4),
+                    child: Text(
+                      "标签",
+                      style: Theme.of(context).textTheme.labelLarge,
                     ),
                   ),
                 ),
               ),
-              Padding(
-                padding: AppStyle.edgeInsetsH8,
-                child: Obx(
-                  () => Row(
-                    children: [
-                      ChoiceChip(
-                        label: const Text("按状态"),
-                        selected: controller.groupMode.value ==
-                            FollowGroupMode.liveStatus,
-                        onSelected: (_) {
-                          controller.setGroupMode(FollowGroupMode.liveStatus);
-                        },
+              Obx(
+                () => Visibility(
+                  visible: controller.filterTagOptions.isNotEmpty,
+                  child: Padding(
+                    padding: AppStyle.edgeInsetsA8.copyWith(top: 4),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Wrap(
+                        spacing: 12,
+                        children: controller.filterTagOptions.map((tag) {
+                          return FilterButton(
+                            text: tag.tag,
+                            selected: controller.selectedTagId.value == tag.id,
+                            onTap: () => controller.setSelectedTag(tag),
+                          );
+                        }).toList(),
                       ),
-                      AppStyle.hGap8,
-                      ChoiceChip(
-                        label: const Text("按平台"),
-                        selected: controller.groupMode.value ==
-                            FollowGroupMode.platform,
-                        onSelected: (_) {
-                          controller.setGroupMode(FollowGroupMode.platform);
-                        },
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -461,14 +440,6 @@ class FollowUserPage extends GetView<FollowUserController> {
         ),
       );
     }
-    if (settings.followRefreshOnEnter.value) {
-      chips.add(
-        InputChip(
-          label: const Text("进页自动刷新"),
-          onDeleted: () => controller.setRefreshOnEnter(false),
-        ),
-      );
-    }
     if (chips.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -582,21 +553,10 @@ class FollowUserPage extends GetView<FollowUserController> {
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text("进入关注页后自动刷新"),
-                    subtitle: const Text("先显示本地列表，再异步全量刷新；关注过多时极易触发抖音限制"),
-                    value: settings.followRefreshOnEnter.value,
-                    onChanged: (value) async {
-                      if (value) {
-                        final confirmed = await Utils.showAlertDialog(
-                          "开启后，每次进入关注页都会先显示本地列表，再异步发起一次全量刷新。关注过多时，极其容易触发抖音限制，尤其是抖音关注较多时更明显。",
-                          title: "风险提示",
-                          confirm: "继续开启",
-                        );
-                        if (!confirmed) {
-                          return;
-                        }
-                      }
-                      controller.setRefreshOnEnter(value);
-                    },
+                    // 自动刷新已默认开启、不依赖开关，UI 只显示只读提示。
+                    subtitle: const Text("已默认开启，进入关注页时自动后台快刷"),
+                    value: true,
+                    onChanged: null,
                   ),
                 ],
               ),
@@ -662,54 +622,6 @@ class FollowUserPage extends GetView<FollowUserController> {
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRefreshProgress(BuildContext context) {
-    final progress = FollowService.instance.refreshProgress.value;
-    if (!progress.active) {
-      return const SizedBox.shrink();
-    }
-    final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: AppStyle.edgeInsetsH8.copyWith(top: 4, bottom: 4),
-      child: Material(
-        color: colorScheme.surfaceContainerHighest.withAlpha(
-          progress.automatic ? 180 : 220,
-        ),
-        borderRadius: AppStyle.radius8,
-        child: Padding(
-          padding: AppStyle.edgeInsetsA12,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      progress.stage,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
-                  Text("${progress.resolvedCount}/${progress.total}"),
-                ],
-              ),
-              if (progress.detail.isNotEmpty) ...[
-                AppStyle.vGap4,
-                Text(
-                  progress.detail,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-              AppStyle.vGap8,
-              LinearProgressIndicator(
-                value: progress.total > 0 ? progress.percent : null,
-                minHeight: 6,
-              ),
-            ],
           ),
         ),
       ),
