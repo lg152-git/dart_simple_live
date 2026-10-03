@@ -370,7 +370,6 @@ class FollowService extends GetxService {
     DouyinFollowRefreshLimiter? douyinLimiter,
     int workerIndex = 0,
     bool pauseRemainingOnLimited = false,
-    bool statusOnly = false,
   }) async {
     final previousStatus = item.liveStatus.value;
     final notifyReady = _liveNotifyReadyIds.contains(item.id);
@@ -389,14 +388,7 @@ class FollowService extends GetxService {
         douyinLimiter.onSuccess();
       }
       item.liveStatus.value = isLiving ? 2 : 1;
-      if (statusOnly) {
-        // 进页快速刷新：只关心开播状态，不拉详情/不 reconcile，
-        // 让开播主播尽快冒到列表顶部；详情由后台任务补齐。
-        if (item.liveStatus.value != 2) {
-          item.liveStartTime = null;
-          _liveNotifySentIds.remove(item.id);
-        }
-      } else if (item.siteId == Constant.kDouyin) {
+      if (item.siteId == Constant.kDouyin) {
         await _reconcileDouyinFollowIdentity(
           item,
           site.liveSite,
@@ -591,41 +583,6 @@ class FollowService extends GetxService {
     return _distinctFollowUsers(sortFollowUsers(pageItems));
   }
 
-  List<FollowUser> buildEnterPageRefreshTargets(Iterable<FollowUser> pageItems) {
-    final currentKey = CurrentRoomService.instance.currentKey;
-    final currentIndex = currentKey.isEmpty
-        ? -1
-        : followList.indexWhere((item) =>
-            "${item.siteId}_${item.roomId}" == currentKey ||
-                item.id == currentKey);
-    final merged = <FollowUser>[
-      if (currentIndex >= 0) followList[currentIndex],
-      ...followList.where((item) => item.isSpecialFollow),
-      ...pageItems,
-    ];
-    final unique = _distinctFollowUsers(merged);
-    // 进页快刷排序：特别关注 > 当前房间 > 开播中 > 未开播 > 未知(0)。
-    // 让"正在直播"的主播优先被刷新，状态一确认就立刻重排到顶部。
-    int bucket(FollowUser item) {
-      if (item.isSpecialFollow) return 0;
-      if (currentKey.isNotEmpty &&
-          ("${item.siteId}_${item.roomId}" == currentKey ||
-              item.id == currentKey)) {
-        return 1;
-      }
-      final s = item.liveStatus.value;
-      if (s == 2) return 2;
-      if (s == 1) return 3;
-      return 4; // 未知/未检查，优先检查
-    }
-    unique.sort((a, b) {
-      final cmp = bucket(a).compareTo(bucket(b));
-      if (cmp != 0) return cmp;
-      return b.addTime.compareTo(a.addTime);
-    });
-    return unique;
-  }
-
   String buildPageRefreshScopeKey(String pageKey) => "page:$pageKey";
 
   String _refreshTargetKey(FollowUser item) {
@@ -797,33 +754,6 @@ class FollowService extends GetxService {
     } finally {
       _previewRefreshingKeys.removeAll(keys);
     }
-  }
-
-  /// 进页快刷只查开播状态；封面/标题/开播时间等详情
-  /// 由它在后台静默补齐（不显示进度 UI、不阻塞进页体验），
-  /// 补齐完成后通过 filterData() 让列表自动刷新。
-  Future<void> refreshEnterPageDetails() async {
-    final liveTargets = _distinctFollowUsers(
-      followList.where((item) => item.liveStatus.value == 2),
-    );
-    if (liveTargets.isEmpty) {
-      return;
-    }
-    final targets = _buildPreviewTargets(followList, force: true);
-    await _refreshMetadataTargets(
-      targets.isNotEmpty ? targets : liveTargets,
-      scope: const FollowRefreshScope(
-        scopeKey: "enter-details",
-        includeAllNormals: false,
-        automatic: true,
-        allowBackgroundSpecials: false,
-        stage: "正在补齐封面与标题",
-        backgroundStage: "",
-      ),
-      stage: "正在补齐封面与标题",
-      refreshProgressUi: false,
-      reconcileDouyinIdentity: true,
-    );
   }
 
   Future<FollowUser> resolveFollowBeforeEnter(FollowUser item) async {
@@ -1021,8 +951,6 @@ class FollowService extends GetxService {
     bool force = true,
     FollowRefreshScope? scope,
     bool allowDetailRefresh = true,
-    int? statusConcurrency,
-    bool statusOnly = false,
   }) async {
     final resolvedScope = scope ??
         FollowRefreshScope.all(
@@ -1035,8 +963,6 @@ class FollowService extends GetxService {
       targets,
       force: force,
       scope: resolvedScope,
-      statusConcurrency: statusConcurrency,
-      statusOnly: statusOnly,
     );
     if (!allowDetailRefresh || resolvedScope.automatic || targets.isEmpty) {
       return;
@@ -1055,8 +981,6 @@ class FollowService extends GetxService {
     List<FollowUser> targets, {
     bool force = false,
     required FollowRefreshScope scope,
-    int? statusConcurrency,
-    bool statusOnly = false,
   }) async {
     final now = DateTime.now();
     final lastStartedAt = _lastUpdateStatusStartedAt;
@@ -1101,10 +1025,9 @@ class FollowService extends GetxService {
     }
 
     try {
-      var concurrency = statusConcurrency ??
-          getOptimalConcurrency(
-            totalCount: targets.length,
-          );
+      var concurrency = getOptimalConcurrency(
+        totalCount: targets.length,
+      );
       final policy = BulkDataImportService.policyForCount(targets.length);
       final hasFullDouyinCookie = DouyinCookieHelper.hasFullCookie(
         (Sites.allSites[Constant.kDouyin]?.liveSite as DouyinSite?)?.cookie ??
@@ -1116,11 +1039,7 @@ class FollowService extends GetxService {
         "scope=${scope.scopeKey} fullDouyinCookie=$hasFullDouyinCookie",
       );
 
-      // statusOnly（进页快刷）保留调用方给的优先级顺序（特别关注 > 当前房间 >
-      // 开播 > 未开播 > 未知），不按站点顺序重排；普通刷新仍走站点交错顺序。
-      final orderedTargets = statusOnly
-          ? targets
-          : _buildOrderedRefreshTargets(targets);
+      final orderedTargets = _buildOrderedRefreshTargets(targets);
       final filteredTargets = _applyDouyinRefreshPolicy(
         orderedTargets,
         scope: scope,
@@ -1223,22 +1142,15 @@ class FollowService extends GetxService {
               return;
             }
             var item = taskQueue.removeFirst();
-            final previousItemStatus = item.liveStatus.value;
             final result = await _updateLiveStatus(
               item,
               generation: generation,
               douyinLimiter: douyinLimiter,
               workerIndex: workerId,
               pauseRemainingOnLimited: scope.includeAllNormals,
-              statusOnly: statusOnly,
             );
             if (generation != _updateGeneration) {
               return;
-            }
-            if (statusOnly && item.liveStatus.value != previousItemStatus) {
-              // 进页快刷：单个主播状态一有结果立刻重排，开播的马上冒到顶部，
-              // 不用等整批刷新完。
-              filterData();
             }
             if (result.limited) {
               limitedCount++;

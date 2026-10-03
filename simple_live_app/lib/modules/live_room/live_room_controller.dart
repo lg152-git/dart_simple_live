@@ -34,6 +34,7 @@ import 'package:simple_live_app/services/ios_audio_session_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/services/live_subtitle_service.dart';
 import 'package:simple_live_app/services/mpv_options_service.dart';
+import 'package:simple_live_app/widgets/filter_button.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/net_image.dart';
@@ -112,6 +113,7 @@ class LiveRoomController extends PlayerController
   Rx<String?> contributionRankError = Rx<String?>(null);
   Rx<DateTime?> contributionRankUpdatedAt = Rx<DateTime?>(null);
   RxDouble danmakuViewportHeight = 0.0.obs;
+  final liveRoomFollowFilterMode = 0.obs;
   final liveRoomSelectedPanelKey = "chat".obs;
   final desktopSidePanelCollapsed = false.obs;
   RxSet<String> tempMutedUsers = <String>{}.obs;
@@ -1474,8 +1476,7 @@ class LiveRoomController extends PlayerController
       _scheduleOverlayDanmaku(msg);
       return;
     } else if (msg.type == LiveMessageType.online) {
-      // 只保留 HTTP 轮询的“正在观看”数值（room_view_stats.display_value），
-      // 不再被 WebSocket 推送的 totalUser 覆盖，避免数值在两个口径间交替跳变。
+      online.value = msg.data;
     } else if (msg.type == LiveMessageType.superChat) {
       if (msg.data is! LiveSuperChatMessage) {
         return;
@@ -3192,44 +3193,57 @@ class LiveRoomController extends PlayerController
     );
   }
 
-  List<FollowUser> _liveFollowUsersByPlatformOrder() {
-    const order = [
-      Constant.kDouyin,
-      Constant.kBiliBili,
-      Constant.kDouyu,
-      Constant.kHuya,
-    ];
-    final live = FollowService.instance.liveList.toList();
-    int indexFor(String siteId) {
-      final i = order.indexOf(siteId);
-      return i < 0 ? 1000 + siteId.hashCode % 1000 : i;
+  List<FollowUser> _followUsersByFilterMode(int filterMode) {
+    switch (filterMode) {
+      case 1:
+        return FollowService.instance.sortFollowUsers(
+          FollowService.instance.liveList,
+        );
+      case 2:
+        return FollowService.instance.sortFollowUsers(
+          FollowService.instance.notLiveList,
+        );
+      default:
+        return FollowService.instance.sortFollowUsers(
+          FollowService.instance.followList,
+        );
     }
-    live.sort((a, b) {
-      final ai = indexFor(a.siteId);
-      final bi = indexFor(b.siteId);
-      if (ai != bi) {
-        return ai.compareTo(bi);
-      }
-      final aSpecial = a.isSpecialFollow ? 0 : 1;
-      final bSpecial = b.isSpecialFollow ? 0 : 1;
-      if (aSpecial != bSpecial) {
-        return aSpecial.compareTo(bSpecial);
-      }
-      return b.addTime.compareTo(a.addTime);
-    });
-    return live;
   }
 
   Widget buildFollowUserSelection({
     required VoidCallback onClose,
     ScrollController? scrollController,
   }) {
+    const options = ["全部", "直播中", "未开播"];
     return Obx(() {
-      final followUsers = _liveFollowUsersByPlatformOrder();
+      final filterMode = liveRoomFollowFilterMode.value;
+      final followUsers = _followUsersByFilterMode(filterMode);
       return Stack(
         children: [
           Column(
             children: [
+              Padding(
+                padding: AppStyle.edgeInsetsA12.copyWith(bottom: 0),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: List.generate(options.length, (index) {
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          right: index == options.length - 1 ? 0 : 12,
+                        ),
+                        child: FilterButton(
+                          text: options[index],
+                          selected: filterMode == index,
+                          onTap: () {
+                            liveRoomFollowFilterMode.value = index;
+                          },
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: FollowService.instance.loadData,

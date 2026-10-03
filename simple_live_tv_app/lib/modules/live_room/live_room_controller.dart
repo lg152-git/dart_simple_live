@@ -620,8 +620,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         ),
       ]);
     } else if (msg.type == LiveMessageType.online) {
-      // 只保留 HTTP 轮询的“正在观看”数值（room_view_stats.display_value），
-      // 不再被 WebSocket 推送的 totalUser 覆盖，避免数值在两个口径间交替跳变。
+      online.value = msg.data;
     } else if (msg.type == LiveMessageType.superChat) {
       //superChats.add(msg.data);
     }
