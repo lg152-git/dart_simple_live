@@ -58,7 +58,13 @@ if ($DryRun) {
     Step "git fetch origin (dry-run)"
 } else {
     Step "git fetch origin"
-    git fetch origin 2>&1 | Where-Object { $_ -notmatch "remote:" -and $_ -notmatch "^\s*$" } | ForEach-Object { Write-Host "  $_" }
+    $fetchOut = & git fetch origin 2>&1
+    $fetchCode = $LASTEXITCODE
+    if ($fetchCode -ne 0) {
+        $fetchOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        Fail "fetch failed (exit $fetchCode), check network"
+    }
+    $fetchOut | Where-Object { $_ -notmatch "remote:" -and $_ -notmatch "^\s*$" } | ForEach-Object { Write-Host "  $_" }
 }
 
 # ---------- 2. fast-forward local master ----------
@@ -78,7 +84,12 @@ if ($curBranch -ne "main") {
         Step "will switch to main"
     } else {
         Step "git checkout main"
-        git checkout main 2>&1 | ForEach-Object { Write-Host "  $_" }
+        $coOut = & git checkout main 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $coOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+            Fail "git checkout main failed"
+        }
+        $coOut | Where-Object { $_ -notmatch "^\s*$" } | ForEach-Object { Write-Host "  $_" }
         $dirty = git status --porcelain
         if ($dirty) { Fail "main working tree dirty, git stash or commit first" }
     }
@@ -93,7 +104,7 @@ if ($DryRun) {
     exit 0
 }
 
-$null = git merge master 2>&1
+$mergeOut = & git merge master 2>&1
 $mergeOk = ($LASTEXITCODE -eq 0)
 if (-not $mergeOk) {
     $base = (git merge-base master main 2>$null)
@@ -197,8 +208,15 @@ if ($NoPush) {
     Step "skipped push (-NoPush). local main = $(git rev-parse --short HEAD)"
 } else {
     Step "git push origin main"
-    git push origin main 2>&1 | Where-Object { $_ -notmatch "remote:" -and $_ -notmatch "^\s*$" } | ForEach-Object { Write-Host "  $_" }
-    if ($LASTEXITCODE -ne 0) { Fail "push failed, check network/credentials" }
+    # git writes progress lines to stderr; capture & inspect without letting PS treat stderr as an error
+    $pushOut = & git push origin main 2>&1
+    $pushCode = $LASTEXITCODE
+    if ($pushCode -eq 0) {
+        $pushOut | Where-Object { $_ -notmatch "remote:" -and $_ -notmatch "^\s*$" } | ForEach-Object { Write-Host "  $_" }
+    } else {
+        $pushOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        Fail "push failed (exit $pushCode), check network/credentials"
+    }
 }
 
 Step "done. main = $(git rev-parse --short HEAD), whitelist $($whitelist.Count) files preserved"
