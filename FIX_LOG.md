@@ -19,15 +19,47 @@ main 分支版本管理失败，部分文件缺失，代码跑不通。本次修
 
 ## 构建步骤
 
+### 前置要求（Windows 端）
+
+| 依赖 | 版本要求 | 说明 |
+|------|----------|------|
+| Flutter | 3.x（含 Windows desktop 支持） | 需在 `flutter doctor` 中显示 Windows 工具链正常 |
+| Visual Studio 2022 | Build Tools 或完整版 | 勾选 "Desktop development with C++" 工作负载（MSVC v143 + Windows 10/11 SDK） |
+| CMake | 3.x | 随 VS Build Tools 安装，或单独安装 |
+| Git | 任意 | 克隆仓库用 |
+
+### 构建命令
+
 ```powershell
+git clone -b main https://github.com/lg152-git/dart_simple_live.git
+cd dart_simple_live
+
+# 1. 应用模块
 cd simple_live_app
 flutter pub get
 flutter build windows --debug
 # 运行
 .\build\windows\x64\runner\Debug\simple_live_app.exe
+
+# 2. 如需编译其他模块
+cd ..\simple_live_console
+flutter pub get
+cd ..\simple_live_tv_app
+flutter pub get
 ```
 
 构建全程使用本地 vendor 的 7z 文件，**无需访问 GitHub**，网络环境受限也可正常编译。
+
+### 首次构建注意事项
+
+- `flutter build` 会自动触发 CMake 配置 + 编译所有 native 插件（media_kit、inappwebview、permission_handler 等），首次约 3~5 分钟。
+- 构建完成后 `build\windows\x64\runner\Debug\` 下会有 `simple_live_app.exe` + 全套 `.dll`（libmpv-2.dll、libEGL.dll、libGLESv2.dll、flutter_windows.dll 等），**exe 必须和这些 dll 放在同一目录运行**，不能单独移动 exe。
+- 如需 Release 版本：`flutter build windows --release`，产物在 `build\windows\x64\runner\Release\`。
+
+### 已知构建警告（不影响运行，可忽略）
+
+- `dart_quickjs.dll was not found during CMake configure` — 配置期找不到，但链接/运行期正常加载。
+- `CMP0175` / inappwebview 的 `C4819`/`C4244`/`C4458` — MSVC 编码/类型转换噪音警告，不影响功能。
 
 ## 运行环境白屏问题（重要）
 
