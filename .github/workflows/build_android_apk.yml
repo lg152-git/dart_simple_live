@@ -1,0 +1,103 @@
+name: build-android-apk
+
+# 每次运行都以 main 分支最新一次 commit 为源码构建 Android release APK。
+# - workflow_dispatch: 手动触发，默认构建 main 最新 commit，也可指定其它 ref
+# - push: 推送到 main 时自动构建；推送到 ci/** 分支时用于验证/调试工作流本身
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要检出的 Git ref（默认 main，即 main 分支最新一次 commit）"
+        required: false
+        default: "main"
+  push:
+    branches:
+      - main
+      - "ci/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      # 始终检出 main 分支的最新 commit（push 事件 inputs.ref 为空时回退为 main）
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          fetch-depth: 0
+
+      - name: Show build commit
+        id: commit_info
+        shell: bash
+        run: |
+          echo "===== 源码信息 ====="
+          git log -1 --format="commit: %H%nshort:  %h%nauthor: %an <%ae>%ndate:   %ad%nsubject: %s"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.9"
+          cache: true
+
+      # 可选：仓库配置了 release keystore secrets 时进行正式签名；
+      # 未配置时 flutter 会自动以 debug key 签名，可直接侧载安装（如自用机）。
+      - name: Prepare Android keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$STORE_PASSWORD" && -n "$KEY_PASSWORD" && -n "$KEY_ALIAS" ]]; then
+            printf '%s' "$KEYSTORE_BASE64" | openssl base64 -d -A > simple_live_app/android/release-keystore.jks
+            printf 'storeFile=../release-keystore.jks\nstorePassword=%s\nkeyPassword=%s\nkeyAlias=%s\n' \
+              "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > simple_live_app/android/key.properties
+            echo "release keystore configured"
+          else
+            echo "no release keystore secrets, fallback to default (debug) signing"
+          fi
+
+      - name: Restore packages
+        shell: bash
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: Build APK (release, split per ABI)
+        shell: bash
+        run: |
+          cd simple_live_app
+          flutter build apk --release --split-per-abi
+
+      - name: Rename APKs with ABI
+        shell: bash
+        run: |
+          cd simple_live_app/build/app/outputs/flutter-apk
+          for f in app-*-release.apk; do
+            abi=$(echo "$f" | sed -E 's/^app-(.*)-release\.apk$/\1/')
+            mv "$f" "simple_live_${abi}.apk"
+          done
+          ls -lh
+
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ steps.commit_info.outputs.short_sha }}
+          path: simple_live_app/build/app/outputs/flutter-apk/simple_live_*.apk
+          if-no-files-found: error
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "🤖 Android APKs built from main tip: ${{ steps.commit_info.outputs.short_sha }}"
+          echo "荣耀50 (MagicOS 8 / Android 12, 骁龙778G, arm64-v8a) 请安装: simple_live_arm64-v8a.apk"
