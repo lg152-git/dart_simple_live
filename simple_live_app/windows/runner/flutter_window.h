@@ -27,6 +27,7 @@ class FlutterWindow : public Win32Window {
 
  private:
   void ConfigureWindowChromeChannel();
+  void ConfigureWindowFrameChannel();
   void ApplyFullscreenChrome();
   void RestoreWindowChrome();
   void SetImeForShortcutCapture(bool captureEnabled);
@@ -42,6 +43,8 @@ class FlutterWindow : public Win32Window {
 
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       window_chrome_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      window_frame_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       shortcut_channel_;
   LONG_PTR windowed_style_ = 0;

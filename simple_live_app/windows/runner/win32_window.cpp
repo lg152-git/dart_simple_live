@@ -3,6 +3,8 @@
 #include <dwmapi.h>
 #include <flutter_windows.h>
 
+#include <cstdint>
+
 #include "resource.h"
 
 namespace {
@@ -153,6 +155,48 @@ bool Win32Window::Show() {
   return ShowWindow(window_handle_, SW_SHOWNORMAL);
 }
 
+void Win32Window::SetNormalFrameBaseline(int32_t left, int32_t top,
+                                         int32_t width, int32_t height,
+                                         bool explicit_bounds) {
+  if (!window_handle_) {
+    return;
+  }
+  // Refuse to record a baseline from a maximized or frameless frame: saving
+  // such a frame would pin the wrong "normal" size for every later restore.
+  const auto style = GetWindowLongPtr(window_handle_, GWL_STYLE);
+  if (!(style & WS_CAPTION) || IsZoomed(window_handle_)) {
+    if (!explicit_bounds) {
+      return;
+    }
+  }
+  if (explicit_bounds) {
+    // Callers pass physical pixel bounds already DPI-scaled.
+    normal_frame_x_ = left;
+    normal_frame_y_ = top;
+    normal_frame_w_ = width;
+    normal_frame_h_ = height;
+  } else {
+    RECT rect;
+    if (!GetWindowRect(window_handle_, &rect)) {
+      return;
+    }
+    normal_frame_x_ = rect.left;
+    normal_frame_y_ = rect.top;
+    normal_frame_w_ = rect.right - rect.left;
+    normal_frame_h_ = rect.bottom - rect.top;
+  }
+  has_normal_frame_baseline_ = true;
+}
+
+void Win32Window::RestoreNormalFrame() {
+  if (!window_handle_ || !has_normal_frame_baseline_) {
+    return;
+  }
+  SetWindowPos(window_handle_, nullptr, normal_frame_x_, normal_frame_y_,
+               normal_frame_w_, normal_frame_h_,
+               SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 // static
 LRESULT CALLBACK Win32Window::WndProc(HWND const window,
                                       UINT const message,
@@ -186,6 +230,23 @@ Win32Window::MessageHandler(HWND hwnd,
         PostQuitMessage(0);
       }
       return 0;
+
+    case WM_SYSCOMMAND: {
+      const auto command = HIWORD(wparam);
+      // The user is exiting maximization (title-bar restore button,
+      // double-click caption, or Win+Down). Let DefWindowProc perform the
+      // style/size transition, then force the exact baseline frame recorded
+      // when the window was last in normal state so the window shrinks back
+      // to the size it had when the app started - not to whatever
+      // pre-fullscreen "normal" state Windows would otherwise restore to.
+      if (command == SC_RESTORE) {
+        const LRESULT result =
+            DefWindowProc(window_handle_, message, wparam, lparam);
+        RestoreNormalFrame();
+        return result;
+      }
+      break;
+    }
 
     case WM_DPICHANGED: {
       auto newRectSize = reinterpret_cast<RECT*>(lparam);

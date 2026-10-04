@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -64,6 +65,21 @@ class Win32Window {
                                  WPARAM const wparam,
                                  LPARAM const lparam) noexcept;
 
+  // Records the baseline normal frame the window returns to when
+  // maximization ends (system restore button, Win+Down, double-click
+  // caption). The values are physical window-frame pixels: when
+  // |explicit_bounds| is true they are used verbatim; otherwise the
+  // current window rect is sampled. Sampling is skipped when the window
+  // is maximized or has lost its caption; explicit bounds may still be
+  // accepted then.
+  virtual void SetNormalFrameBaseline(int32_t left, int32_t top,
+                                      int32_t width, int32_t height,
+                                      bool explicit_bounds);
+
+  // Applies the recorded normal frame after a maximize/restore transition.
+  // No-op when no baseline has been recorded.
+  virtual void RestoreNormalFrame();
+
   // Called when CreateAndShow is called, allowing subclass window-related
   // setup. Subclasses should return false if setup fails.
   virtual bool OnCreate();
@@ -97,6 +113,17 @@ class Win32Window {
 
   // window handle for hosted content.
   HWND child_content_ = nullptr;
+
+  // Baseline normal (non-maximized) window frame. Captured when the window is
+  // first shown in normal state; used to force the window back to this exact
+  // size/position when the user exits maximization via the system restore
+  // button, so that maximize -> fullscreen -> exit -> restore always returns
+  // the window to the size it had when the app started.
+  bool has_normal_frame_baseline_ = false;
+  LONG normal_frame_x_ = 0;
+  LONG normal_frame_y_ = 0;
+  LONG normal_frame_w_ = 0;
+  LONG normal_frame_h_ = 0;
 };
 
 #endif  // RUNNER_WIN32_WINDOW_H_

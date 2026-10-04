@@ -235,9 +235,45 @@ Future<void> setupDesktopWindowLifecycle() async {
 }
 
 class _DesktopWindowLifecycle with WindowListener {
+  static const _windowsFrameChannel = MethodChannel('simple_live/windows_frame');
   bool _closing = false;
   bool _restoring = false;
   Timer? _saveTimer;
+
+  /// Publishes the remembered normal-window frame to the native baseline the
+  /// title-bar 还原 button restores to. The native layer falls back to the
+  /// startup frame when nothing has been published.
+  Future<void> _publishNormalFrame({Rect? bounds}) async {
+    if (!Platform.isWindows) {
+      return;
+    }
+    try {
+      final settings = AppSettingsController.instance;
+      if (!settings.rememberWindowPlacement.value) {
+        return;
+      }
+      // Use the persisted normal bounds only; publishing the current bounds
+      // while maximized would pin the maximized frame as the restore target.
+      if (await windowManager.isMaximized()) {
+        return;
+      }
+      final frame = bounds ?? settings.getDesktopWindowBounds();
+      if (frame == null) {
+        return;
+      }
+      await _windowsFrameChannel.invokeMethod<void>(
+        'setNormalFrame',
+        <String, dynamic>{
+          'left': frame.left,
+          'top': frame.top,
+          'width': frame.width,
+          'height': frame.height,
+        },
+      );
+    } catch (e) {
+      Log.logPrint(e);
+    }
+  }
 
   Future<void> restoreWindowPlacement() async {
     _restoring = true;
@@ -260,6 +296,8 @@ class _DesktopWindowLifecycle with WindowListener {
         }
         if (settings.desktopWindowMaximized) {
           await windowManager.maximize();
+        } else {
+          await _publishNormalFrame();
         }
       } else {
         await windowManager.center();
@@ -354,15 +392,22 @@ class _DesktopWindowLifecycle with WindowListener {
         return;
       }
       final maximized = await windowManager.isMaximized();
-      final previousBounds =
-          AppSettingsController.instance.getDesktopWindowBounds();
-      // 最大化时始终沿用最后一次记录的非最大化窗口尺寸，避免把最大化后的
-      // 边界当作普通尺寸保存，导致退出全屏后点还原按钮回到错误的窗口大小。
-      final bounds = maximized ? (previousBounds ?? await windowManager.getBounds()) : await windowManager.getBounds();
+      // 最大化时沿用最后一次记录的非最大化窗口尺寸，避免把最大化后的边界
+      // 当作普通尺寸保存；小窗状态不保存（窗口尺寸是 PIP 尺寸，无意义）。
+      final bounds = maximized
+          ? AppSettingsController.instance.getDesktopWindowBounds()
+          : await windowManager.getBounds();
+      if (bounds == null) {
+        return;
+      }
       await AppSettingsController.instance.setDesktopWindowPlacement(
         bounds: bounds,
         maximized: maximized,
       );
+      // 同步把普通窗口帧写给原生还原基线，标题栏“还原”按钮永远回到它。
+      if (!maximized) {
+        await _publishNormalFrame(bounds: bounds);
+      }
     } catch (e) {
       Log.logPrint(e);
     }

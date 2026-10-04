@@ -4,6 +4,9 @@
 #include <string>
 #include <utility>
 
+#include <cstdint>
+
+#include <flutter/dart_project.h>
 #include <flutter/standard_method_codec.h>
 #include <imm.h>
 
@@ -67,22 +70,36 @@ bool FlutterWindow::OnCreate() {
         result->NotImplemented();
       });
   ConfigureWindowChromeChannel();
+  ConfigureWindowFrameChannel();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
+    // Show the window only after the first frame has actually rendered, so
+    // the user never sees a blank/white frame. (Showing earlier caused a
+    // white flash before the UI painted.)
     this->Show();
+    if (auto handle = GetHandle()) {
+      ::SetForegroundWindow(handle);
+      // Remember the physical frame the process started with. Later restores
+      // from maximization use this baseline instead of Windows' saved normal
+      // state, which the fullscreen/small-window detour can overwrite.
+      RECT startup_frame;
+      if (::GetWindowRect(handle, &startup_frame)) {
+        SetNormalFrameBaseline(startup_frame.left, startup_frame.top,
+                               startup_frame.right - startup_frame.left,
+                               startup_frame.bottom - startup_frame.top,
+                               /*explicit_bounds=*/true);
+      }
+    }
   });
 
-  // Show the window immediately in normal size so the user sees the app
-  // launching; the first frame will paint into it as soon as it's ready.
-  // (Without this, the window stays hidden until the very first frame,
-  // which can appear as "no window" if media_kit or another plugin blocks
-  // frame rendering.)
+  // Position the (still hidden) window at the intended origin/size so that
+  // when the first frame shows it, it lands in the right place without a
+  // visible move. Do NOT use SWP_SHOWWINDOW here -- visibility is deferred
+  // to the SetNextFrameCallback above.
   if (auto handle = GetHandle()) {
-    ::SetWindowPos(handle, HWND_TOP, 100, 100, 1280, 720,
-                   SWP_NOZORDER | SWP_SHOWWINDOW | SWP_NOACTIVATE);
-    ::ShowWindow(handle, SW_SHOWNORMAL);
-    ::SetForegroundWindow(handle);
+    ::SetWindowPos(handle, nullptr, 100, 100, 1280, 720,
+                   SWP_NOACTIVATE | SWP_NOZORDER);
   }
 
   // Flutter can complete the first frame before the "show window" callback is
@@ -110,6 +127,69 @@ void FlutterWindow::ConfigureWindowChromeChannel() {
         }
         if (call.method_name() == "restore") {
           RestoreWindowChrome();
+          result->Success();
+          return;
+        }
+        result->NotImplemented();
+      });
+}
+
+void FlutterWindow::ConfigureWindowFrameChannel() {
+  window_frame_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "simple_live/windows_frame",
+          &flutter::StandardMethodCodec::GetInstance());
+  window_frame_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() == "setNormalFrame") {
+          const auto* arguments =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (arguments) {
+            auto readInt = [&](const flutter::EncodableValue& key, int32_t* out)
+                -> bool {
+              const auto found = arguments->find(key);
+              if (found == arguments->end()) {
+                return false;
+              }
+              if (const auto* v = std::get_if<int32_t>(&found->second)) {
+                *out = *v;
+                return true;
+              }
+              if (const auto* v = std::get_if<double>(&found->second)) {
+                *out = static_cast<int32_t>(*v);
+                return true;
+              }
+              return false;
+            };
+            int32_t left = 0, top = 0, width = 0, height = 0;
+            if (readInt(flutter::EncodableValue("left"), &left) &&
+                readInt(flutter::EncodableValue("top"), &top) &&
+                readInt(flutter::EncodableValue("width"), &width) &&
+                readInt(flutter::EncodableValue("height"), &height) &&
+                width > 0 && height > 0) {
+              // The channel carries Dart logical bounds; scale them with the
+              // window monitor's DPI exactly like Create() does.
+              const POINT target_point = {0, 0};
+              HMONITOR monitor = MonitorFromPoint(target_point,
+                                                   MONITOR_DEFAULTTONEAREST);
+              double scale_factor =
+                  FlutterDesktopGetDpiForMonitor(monitor) / 96.0;
+              SetNormalFrameBaseline(
+                  static_cast<int32_t>(scale_factor * left),
+                  static_cast<int32_t>(scale_factor * top),
+                  static_cast<int32_t>(scale_factor * width),
+                  static_cast<int32_t>(scale_factor * height),
+                  /*explicit_bounds=*/true);
+            }
+          }
+          result->Success();
+          return;
+        }
+        if (call.method_name() == "restoreNormalFrame") {
+          RestoreNormalFrame();
           result->Success();
           return;
         }
@@ -178,6 +258,7 @@ void FlutterWindow::OnDestroy() {
   }
   shortcut_channel_.reset();
   window_chrome_channel_.reset();
+  window_frame_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
