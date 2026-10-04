@@ -1,0 +1,78 @@
+name: build-ios-ipa
+
+# 每次运行都以 main 分支最新一次 commit 为源码构建 iOS 未签名 IPA。
+# - workflow_dispatch: 手动触发，默认构建 main 最新 commit，也可指定其它 ref
+# - push: 推送到 main 时自动构建；推送到 ci/** 分支时用于验证/调试工作流本身
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要检出的 Git ref（默认 main，即 main 分支最新一次 commit）"
+        required: false
+        default: "main"
+  push:
+    branches:
+      - main
+      - "ci/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-ipa:
+    runs-on: macos-latest
+    steps:
+      # 始终检出 main 分支的最新 commit（push 事件 inputs.ref 为空时回退为 main）
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          fetch-depth: 0
+
+      - name: Show build commit
+        id: commit_info
+        shell: bash
+        run: |
+          echo "===== 源码信息 ====="
+          git log -1 --format="commit: %H%nshort:  %h%nauthor: %an <%ae>%ndate:   %ad%nsubject: %s"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.9"
+          cache: true
+
+      - name: Restore packages
+        shell: bash
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: Build iOS (release, no codesign)
+        shell: bash
+        run: |
+          cd simple_live_app
+          flutter build ios --release --no-codesign
+
+      - name: Create unsigned IPA
+        shell: bash
+        run: |
+          cd simple_live_app
+          rm -rf build/ios/iphoneos/Payload
+          mkdir -p build/ios/iphoneos/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/Runner.app
+          (cd build/ios/iphoneos && zip -q -r ios_no_sign.ipa Payload)
+          ls -lh build/ios/iphoneos/ios_no_sign.ipa
+
+      - name: Upload IPA to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-${{ steps.commit_info.outputs.short_sha }}
+          path: simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
+          if-no-files-found: error
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "🍏 iOS unsigned IPA built from main tip: ${{ steps.commit_info.outputs.short_sha }}"
+          echo "Artifact name: ios-ipa-${{ steps.commit_info.outputs.short_sha }}"
