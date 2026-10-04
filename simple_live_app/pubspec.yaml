@@ -94,6 +94,9 @@ dev_dependencies:
 
 dependency_overrides:
   sherpa_onnx_ios: 1.13.4
+  # dynamic_color 1.9.0+ 的 android/build.gradle.kts 未 apply Kotlin 插件却调用
+  # kotlin { compilerOptions { … } }，导致 Android 构建编译失败，固定到 1.8.1。
+  dynamic_color: 1.8.1
   canvas_danmaku:
     path: ../third_party/canvas_danmaku
   media_kit_libs_windows_video:
