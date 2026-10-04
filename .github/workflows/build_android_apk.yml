@@ -1,8 +1,7 @@
 name: build-android-apk
 
 # 每次运行都以 main 分支最新一次 commit 为源码构建 Android release APK。
-# - workflow_dispatch: 手动触发，默认构建 main 最新 commit，也可指定其它 ref
-# - push: 推送到 main 时自动构建；推送到 ci/** 分支时用于验证/调试工作流本身
+# 仅手动触发（workflow_dispatch）：默认构建 main 最新 commit，也可指定其它 ref，不随 push 自动运行。
 on:
   workflow_dispatch:
     inputs:
@@ -10,10 +9,6 @@ on:
         description: "要检出的 Git ref（默认 main，即 main 分支最新一次 commit）"
         required: false
         default: "main"
-  push:
-    branches:
-      - main
-      - "ci/**"
 
 permissions:
   contents: read
