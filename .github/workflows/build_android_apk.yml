@@ -42,6 +42,34 @@ jobs:
           distribution: "zulu"
           java-version: "17"
 
+      # 部分新版插件（如 dynamic_color 1.9.0）的 android/build.gradle.kts 未声明
+      # org.jetbrains.kotlin.android 插件却调用 kotlin { compilerOptions { jvmTarget } }，
+      # 在 AGP 8.9.1 / Kotlin 2.3.21 下编译报 "Unresolved reference: compilerOptions"。
+      # 这里在根构建脚本中为所有子项目强制 apply Kotlin 插件，使 kotlin 扩展可用，
+      # 同时不影响 app 自身已有的 Kotlin 配置（重复 apply 为空操作）。
+      - name: Patch broken plugin gradle scripts
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          path = "simple_live_app/android/build.gradle.kts"
+          with open(path, encoding="utf-8") as f:
+              content = f.read()
+          marker = "allprojects {"
+          patch = (
+              "subprojects {\n"
+              "    apply(plugin = \"org.jetbrains.kotlin.android\")\n"
+              "}\n\n"
+          )
+          if 'apply(plugin = "org.jetbrains.kotlin.android")' in content:
+              print("already patched")
+          else:
+              content = content.replace(marker, patch + marker, 1)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("patched root build.gradle.kts")
+          PY
+          head -12 simple_live_app/android/build.gradle.kts
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
