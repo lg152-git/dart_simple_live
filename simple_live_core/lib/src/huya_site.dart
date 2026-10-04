@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart';
 import 'package:simple_live_core/src/model/tars/get_cdn_token_ex_req.dart';
 import 'package:simple_live_core/src/model/tars/get_cdn_token_ex_resp.dart';
 import 'package:simple_live_core/src/model/tars/huya_message_board.dart';
@@ -43,6 +44,33 @@ class HuyaSite implements LiveSite {
 
   String? playUserAgent;
   DateTime? _lastHeadlineEmptyLogAt;
+
+  /// token 缓存有效期（服务端未返回过期时间时）
+  static const Duration _cdnTokenCacheTtl = Duration(minutes: 3);
+
+  /// token 缓存有效期上限（即使服务端给了更长的过期时间）
+  static const Duration _cdnTokenMaxCacheTtl = Duration(hours: 6);
+
+  /// 单次获取 token 的最大尝试次数（含首次）
+  static const int _cdnTokenMaxAttempts = 3;
+
+  /// 重试间隔基数，第 n 次重试等待 n * 该时长
+  static const Duration _cdnTokenRetryDelay = Duration(milliseconds: 400);
+
+  /// 连续失败达到该次数后进入冷却，期间直接走页面 anti-code 兜底
+  static const int _cdnTokenFailStreakLimit = 3;
+
+  /// 冷却时长：避免失败重试持续触发虎牙风控
+  static const Duration _cdnTokenCooldown = Duration(seconds: 45);
+
+  /// 播放 token 缓存：key 为 sStreamName，同一房间各线路共用
+  final Map<String, _CdnTokenEntry> _cdnTokenCache = {};
+
+  /// 单飞：同一 sStreamName 的并发请求只发一次网络请求
+  final Map<String, Future<String>> _cdnTokenInFlight = {};
+
+  int _cdnTokenFailStreak = 0;
+  DateTime? _cdnTokenCooldownUntil;
 
   @override
   String id = "huya";
@@ -299,13 +327,77 @@ class HuyaSite implements LiveSite {
   }
 
   Future<String> getPlayUrl(HuyaLineModel line, int bitRate) async {
-    var antiCode = await getCndTokenInfoEx(line.streamName);
-    antiCode = buildAntiCode(line.streamName, line.presenterUid, antiCode);
+    var antiCode = await _resolveFlvAntiCode(line);
     var url = '${line.line}/${line.streamName}.flv?${antiCode}&codec=264';
     if (bitRate > 0) {
       url += "&ratio=$bitRate";
     }
     return url;
+  }
+
+  /// 解析播放地址所需的 anti-code。
+  ///
+  /// 优先使用 wup 下发的 token（带缓存/重试/冷却），wup 不可用时回退到直播间
+  /// 页面自带的 anti-code 本地计算，避免 403 直接打断播放。
+  /// 页面 anti-code 本身就是合法的鉴权素材（streamlink 的虎牙插件即全程
+  /// 使用页面 anti-code，不调用 wup）。
+  Future<String> _resolveFlvAntiCode(HuyaLineModel line) async {
+    Object? tokenError;
+    try {
+      var token = await getCndTokenInfoEx(line.streamName);
+      return buildAntiCode(line.streamName, line.presenterUid, token);
+    } catch (e) {
+      tokenError = e;
+      CoreLog.w(
+        "虎牙播放 token 获取失败(${line.streamName})，改用页面 anti-code 兜底：$e",
+      );
+    }
+
+    var pageAntiCode = _normalizePageAntiCode(line.flvAntiCode);
+    if (_isUsableAntiCode(pageAntiCode)) {
+      try {
+        var antiCode =
+            buildAntiCode(line.streamName, line.presenterUid, pageAntiCode);
+        CoreLog.i(
+          "虎牙已使用页面 anti-code 兜底：${line.streamName} presenterUid=${line.presenterUid}",
+        );
+        return antiCode;
+      } catch (e) {
+        CoreLog.w("虎牙页面 anti-code 兜底失败(${line.streamName})：$e");
+      }
+    } else {
+      CoreLog.w("虎牙页面 anti-code 不可用(${line.streamName})，缺少必要参数");
+    }
+
+    throw CoreError(
+      "虎牙播放地址获取失败：token 与页面 anti-code 均不可用（原始错误：$tokenError）",
+    );
+  }
+
+  /// anti-code 需包含计算 wsSecret 的全部字段
+  bool _isUsableAntiCode(String antiCode) {
+    if (antiCode.isEmpty) {
+      return false;
+    }
+    var map = Uri(query: antiCode).queryParametersAll;
+    return const ["fm", "wsTime", "fs", "ctype", "t"].every(map.containsKey);
+  }
+
+  /// 页面 anti-code 归一化：固定为移动端参数（与上游长期使用的
+  /// processAnticode 一致），走 uid + uuid 分支，避免依赖页面 uid 字段。
+  String _normalizePageAntiCode(String antiCode) {
+    if (antiCode.isEmpty) {
+      return antiCode;
+    }
+    var query = <String, String>{};
+    for (var entry in Uri(query: antiCode).queryParametersAll.entries) {
+      query[entry.key] = entry.value.first;
+    }
+    query["t"] = "103";
+    query["ctype"] = "tars_mobile";
+    return query.entries
+        .map((e) => '${e.key}=${Uri.encodeComponent(e.value)}')
+        .join('&');
   }
 
   // 构造 anticode, python转写
@@ -369,15 +461,143 @@ class HuyaSite implements LiveSite {
   }
 
   /// return sFlvToken
+  ///
+  /// wup 的 getCdnTokenInfoEx 容易被虎牙风控拒返 403，这里做了四层保护：
+  /// 1. 按 sStreamName 缓存（同一房间各线路只需一次请求）；
+  /// 2. 单飞，并发请求共用同一次网络请求；
+  /// 3. 失败后短间隔重试；
+  /// 4. 连续失败进入冷却，冷却期间直接失败（由 [getPlayUrl] 走页面
+  ///    anti-code 兜底），避免失败重试持续触发风控。
   Future<String> getCndTokenInfoEx(String stream) async {
+    _pruneCdnTokenCache();
+    var cached = _cdnTokenCache[stream];
+    if (cached != null && !cached.expired) {
+      CoreLog.d("虎牙播放 token 缓存命中：$stream");
+      return cached.token;
+    }
+    var inFlight = _cdnTokenInFlight[stream];
+    if (inFlight != null) {
+      CoreLog.d("虎牙播放 token 复用进行中的请求：$stream");
+      return inFlight;
+    }
+    var future = _requestCdnToken(stream);
+    _cdnTokenInFlight[stream] = future;
+    try {
+      return await future;
+    } finally {
+      _cdnTokenInFlight.remove(stream);
+    }
+  }
+
+  Future<String> _requestCdnToken(String stream) async {
+    var cooldownUntil = _cdnTokenCooldownUntil;
+    if (cooldownUntil != null && DateTime.now().isBefore(cooldownUntil)) {
+      throw CoreError(
+        "虎牙 token 服务冷却中（剩余 ${cooldownUntil.difference(DateTime.now()).inSeconds}s），等待恢复",
+      );
+    }
+
+    Object? lastError;
+    for (var attempt = 1; attempt <= _cdnTokenMaxAttempts; attempt++) {
+      try {
+        var token = await _requestCdnTokenOnce(stream);
+        _cdnTokenCache[stream] =
+            _CdnTokenEntry(token.token, _cdnTokenExpiresAt(token.expireTime));
+        _cdnTokenFailStreak = 0;
+        _cdnTokenCooldownUntil = null;
+        if (attempt > 1) {
+          CoreLog.i("虎牙 token 第 $attempt 次尝试成功：$stream");
+        }
+        return token.token;
+      } catch (e) {
+        lastError = e;
+        if (attempt < _cdnTokenMaxAttempts) {
+          CoreLog.w(
+            "虎牙 token 第 $attempt/$_cdnTokenMaxAttempts 次尝试失败（$stream）：$e",
+          );
+          await Future.delayed(_cdnTokenRetryDelay * attempt);
+        }
+      }
+    }
+
+    lastError ??= CoreError("虎牙 token 获取失败");
+    _cdnTokenFailStreak += 1;
+    if (_cdnTokenFailStreak >= _cdnTokenFailStreakLimit) {
+      _cdnTokenFailStreak = 0;
+      _cdnTokenCooldownUntil = DateTime.now().add(_cdnTokenCooldown);
+      CoreLog.w(
+        "虎牙 token 连续失败达到 $_cdnTokenFailStreakLimit 次，进入 ${_cdnTokenCooldown.inSeconds}s 冷却，期间使用页面 anti-code 兜底",
+      );
+    }
+    throw lastError;
+  }
+
+  Future<_CdnTokenResult> _requestCdnTokenOnce(String stream) async {
     var func = "getCdnTokenInfoEx";
     var tid = HuyaUserId();
     tid.sHuYaUA = "pc_exe&7060000&official";
     var tReq = GetCdnTokenExReq();
     tReq.tId = tid;
     tReq.sStreamName = stream;
-    var resp = await tupClient.tupRequest(func, tReq, GetCdnTokenExResp());
-    return resp.sFlvToken;
+    GetCdnTokenExResp resp;
+    try {
+      resp = await tupClient.tupRequest(func, tReq, GetCdnTokenExResp());
+    } on DioException catch (e) {
+      _logWupRejection(stream, e);
+      rethrow;
+    }
+    if (resp.sFlvToken.isEmpty) {
+      throw CoreError("虎牙 token 响应为空");
+    }
+    return _CdnTokenResult(resp.sFlvToken, resp.iExpireTime);
+  }
+
+  /// 记录 wup 被拒的响应信息，用于区分风控 / 劫持 / 边缘节点
+  void _logWupRejection(String stream, DioException e) {
+    var response = e.response;
+    if (response == null) {
+      return;
+    }
+    var body = "";
+    try {
+      if (response.data is List<int>) {
+        body = utf8.decode(response.data as List<int>, allowMalformed: true);
+      } else if (response.data != null) {
+        body = response.data.toString();
+      }
+    } catch (_) {
+      body = "<解码失败>";
+    }
+    if (body.length > 400) {
+      body = "${body.substring(0, 400)}…(共 ${body.length} 字符)";
+    }
+    CoreLog.w(
+      "虎牙 wup 请求被拒：stream=$stream status=${response.statusCode} "
+      "server=${response.headers.value('server')} body=$body",
+    );
+  }
+
+  /// token 过期时间：优先使用服务端返回的 iExpireTime
+  DateTime _cdnTokenExpiresAt(int iExpireTime) {
+    var now = DateTime.now();
+    if (iExpireTime > 0) {
+      var nowMs = now.millisecondsSinceEpoch;
+      // 服务端可能下发秒级或毫秒级时间戳，取合理区间内的解释
+      for (var expireMs in [iExpireTime * 1000, iExpireTime]) {
+        var deltaMs = expireMs - nowMs;
+        if (deltaMs > 0 && deltaMs <= _cdnTokenMaxCacheTtl.inMilliseconds) {
+          return now.add(Duration(milliseconds: deltaMs));
+        }
+      }
+    }
+    return now.add(_cdnTokenCacheTtl);
+  }
+
+  void _pruneCdnTokenCache() {
+    if (_cdnTokenCache.length < 32) {
+      return;
+    }
+    _cdnTokenCache.removeWhere((_, entry) => entry.expired);
   }
 
   @override
@@ -1025,4 +1245,20 @@ class HuyaBitRateModel {
   String toString() {
     return json.encode({"name": name, "bitRate": bitRate});
   }
+}
+
+/// wup 返回的 token 及服务端过期时间
+class _CdnTokenResult {
+  final String token;
+  final int expireTime;
+  _CdnTokenResult(this.token, this.expireTime);
+}
+
+/// token 缓存条目
+class _CdnTokenEntry {
+  final String token;
+  final DateTime expiresAt;
+  _CdnTokenEntry(this.token, this.expiresAt);
+
+  bool get expired => !DateTime.now().isBefore(expiresAt);
 }

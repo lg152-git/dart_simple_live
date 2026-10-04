@@ -60,11 +60,13 @@ class BaseTarsHttp {
   Future<TupResponse<RSP>> tupRequestWithRspCode<REQ, RSP>(
       String methodName, REQ tReq, RSP tRsp) async {
     final data = buildRequest(methodName, tReq);
-    dio.options.headers[HttpHeaders.contentLengthHeader] = data.lengthInBytes;
     logger.d("send tupRequest, methodName:$methodName");
     final result = await dio.post<List<int>>(
       path,
-      data: Stream.fromIterable(data.map((e) => [e])),
+      // 直接传字节，由 dio 自动设置 Content-Length。
+      // 之前是把 Content-Length 写进共享的 dio.options.headers，
+      // 并发请求会互相覆盖，导致部分请求体长度错误被网关拒绝。
+      data: data,
     );
     final value = result.data;
     return tupResponseDecode(methodName, value!, tRsp);
@@ -74,11 +76,10 @@ class BaseTarsHttp {
   Future<TupResponse<void>> tupRequestWithRspCodeNoRsp<REQ>(
       String methodName, REQ tReq) async {
     final data = buildRequest(methodName, tReq);
-    dio.options.headers[HttpHeaders.contentLengthHeader] = data.lengthInBytes;
     logger.d("send tupRequestNoRsp, methodName:$methodName");
     final result = await dio.post<List<int>>(
       path,
-      data: Stream.fromIterable(data.map((e) => [e])),
+      data: data,
     );
     final value = result.data;
     return tupEmptyResponseDecode(methodName, value!);

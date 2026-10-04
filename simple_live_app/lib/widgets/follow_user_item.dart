@@ -186,14 +186,6 @@ class FollowUserItem extends StatelessWidget {
                               _liveDurationText(),
                               style: subtitleStyle,
                             ),
-                          if (playing)
-                            Text(
-                              "正在观看",
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.primary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
                           if (showSpecialMark && item.isSpecialFollow)
                             const Icon(
                               Icons.star,
@@ -298,16 +290,6 @@ class FollowUserItem extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: subtitleStyle,
-                            ),
-                          ),
-                        ],
-                        if (playing) ...[
-                          const SizedBox(width: 8),
-                          Text(
-                            "正在观看",
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.primary,
-                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
@@ -417,15 +399,6 @@ class FollowUserItem extends StatelessWidget {
                                           ),
                                         ),
                                       ),
-                                      if (playing)
-                                        Tooltip(
-                                          message: "正在观看",
-                                          child: Icon(
-                                            Icons.play_circle_outline,
-                                            size: 15,
-                                            color: theme.colorScheme.primary,
-                                          ),
-                                        ),
                                     ],
                                   ),
                                 ],
@@ -506,12 +479,6 @@ class FollowUserItem extends StatelessWidget {
                     label: getStatus(item.liveStatus.value),
                     active: item.liveStatus.value == 2,
                   ),
-                  if (playing)
-                    _buildInfoChip(
-                      context,
-                      label: "正在观看",
-                      active: true,
-                    ),
                   if (selectedForMultiRoom)
                     _buildInfoChip(
                       context,
@@ -702,12 +669,10 @@ class FollowUserItem extends StatelessWidget {
             .toInt();
     final color = selectedForMultiRoom
         ? theme.colorScheme.secondary
-        : playing
-            ? theme.colorScheme.primary
-            : theme.colorScheme.outlineVariant.withAlpha(idleBorderAlpha);
+        : theme.colorScheme.outlineVariant.withAlpha(idleBorderAlpha);
     return Border.all(
       color: color,
-      width: selectedForMultiRoom || playing ? 1.6 : idleWidth,
+      width: selectedForMultiRoom ? 1.6 : idleWidth,
     );
   }
 
