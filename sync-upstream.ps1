@@ -143,8 +143,10 @@ if ($mergeOk) {
     }
     $cmt = "chore: sync upstream master into main"
     if (Test-Path ".git\MERGE_MSG") {
-        $cmt = (Get-Content ".git\MERGE_MSG" -Raw) -split "`n" | Where-Object { $_ -notmatch "^#" } -join "`n"
+        $msgLines = @((Get-Content ".git\MERGE_MSG" -Raw) -split "`n" | Where-Object { $_ -notmatch "^#" })
+        $cmt = ($msgLines -join "`n").Trim()
     }
+    if ([string]::IsNullOrWhiteSpace($cmt)) { $cmt = "Merge branch 'master'" }
     $null = git commit -m $cmt -m "whitelist kept $oursCount [ours] files, took $theirsCount [theirs] files from upstream"
     Step "conflicts resolved, committed $(git rev-parse --short HEAD)"
 }
