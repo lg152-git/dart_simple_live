@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:simple_live_tv_app/app/app_focus_node.dart';
 import 'package:simple_live_tv_app/app/app_style.dart';
+import 'package:simple_live_tv_app/app/constant.dart';
 import 'package:simple_live_tv_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_tv_app/app/sites.dart';
 import 'package:simple_live_tv_app/app/utils.dart';
@@ -93,6 +94,17 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppStyle.textStyleWhite.copyWith(fontSize: 24.w),
+                      ),
+                      Obx(
+                        () => Text(
+                          controller.site.id == Constant.kDouyin
+                              ? "在线 ${Utils.onlineToString(controller.online.value)}  ·  累计 ${Utils.onlineToString(controller.totalViewers.value)}"
+                              : "在线 ${Utils.onlineToString(controller.online.value)}",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              AppStyle.textStyleWhite.copyWith(fontSize: 20.w),
+                        ),
                       ),
                     ],
                   ),
@@ -617,6 +629,8 @@ void showPlayerSettings(LiveRoomController controller) {
                     96.0: "96",
                     120.0: "120",
                     144.0: "144",
+                    168.0: "168",
+                    192.0: "192",
                   },
                   value: AppSettingsController.instance.danmuSize.value,
                   onChanged: (e) {
@@ -638,6 +652,8 @@ void showPlayerSettings(LiveRoomController controller) {
                   autofocus: danmakuSpeedFoucsNode.isFoucsed.value,
                   title: "弹幕速度",
                   items: {
+                    30.0: "极慢",
+                    24.0: "超慢",
                     18.0: "很慢",
                     14.0: "较慢",
                     12.0: "慢",

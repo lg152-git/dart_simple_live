@@ -73,6 +73,9 @@ class LocalStorageService extends GetxService {
   static const String kPlayerCompatMode = "PlayerCompatMode";
   static const String kPlayerAutoPause = "PlayerAutoPause";
   static const String kAllowBackgroundPlayback = "AllowBackgroundPlayback";
+  static const String kPlayerFullscreenOrientation =
+      "PlayerFullscreenOrientation";
+  static const String kAllowConcurrentAudio = "AllowConcurrentAudio";
   static const String kPlayerBufferSize = "PlayerBufferSize";
   static const String kPlayerForceHttps = "PlayerForceHttps";
   static const String kPlayerGestureControlEnable =
@@ -105,6 +108,8 @@ class LocalStorageService extends GetxService {
   static const String kDouyinCookie = "DouyinCookie";
   static const String kDouyuCookie = "DouyuCookie";
   static const String kDouyuDeviceId = "DouyuDeviceId";
+  static const String kDouyuLtp0 = "DouyuLtp0";
+  static const String kDouyuPassportDid = "DouyuPassportDid";
   static const String kKuaishouCookie = "KuaishouCookie";
   static const String kKuaishouKww = "KuaishouKww";
   static const String kKuaishouCookieExpiresAt = "KuaishouCookieExpiresAt";

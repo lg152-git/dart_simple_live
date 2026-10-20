@@ -37,6 +37,10 @@ class DouyinDanmaku implements LiveDanmaku {
 
   @override
   Function(LiveMessage msg)? onMessage;
+
+  /// 诊断回调：RoomUserSeqMessage 原始消息（当前在线/累计观看/热度等字段核对）。
+  /// 仅诊断工具设置，App 内保持 null 无开销。
+  void Function(RoomUserSeqMessage message)? onRoomUserSeqDebug;
   @override
   Function(String msg)? onClose;
   @override
@@ -534,11 +538,14 @@ class DouyinDanmaku implements LiveDanmaku {
 
   void unPackWebcastRoomUserSeqMessage(List<int> payload) {
     var roomUserSeqMessage = RoomUserSeqMessage.fromBuffer(payload);
-
+    onRoomUserSeqDebug?.call(roomUserSeqMessage);
+    // data=当前在线（total），累计观看放 totalViews；此前只发 totalUser
+    // 会导致与 HTTP 轮询的"当前在线"轮流写入同一显示位，表现为数值来回跳
     onMessage?.call(
       LiveMessage(
         type: LiveMessageType.online,
-        data: roomUserSeqMessage.totalUser.toInt(),
+        data: roomUserSeqMessage.total.toInt(),
+        totalViews: roomUserSeqMessage.totalUser.toInt(),
         color: LiveMessageColor.white,
         message: "",
         userName: "",

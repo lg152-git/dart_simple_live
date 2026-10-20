@@ -80,20 +80,61 @@ bool shouldRequestLandscapeForAndroidExternalWindow({
       canLockOrientation;
 }
 
-bool shouldRestoreAndroidFullscreenAfterExternalWindowExit({
+/// 系统外部窗口（小窗/自由窗/分屏）展开回普通任务后，是否需要重新进入沉浸式。
+/// 这里不再复用方向策略：平板同样需要恢复沉浸式，只是方向交给系统。
+bool shouldRestoreImmersiveAfterExternalWindowExit({
   required bool wasInExternalWindow,
   required bool isInExternalWindow,
   required bool playerFullscreen,
-  required bool hasPendingLandscapeRequest,
-  required bool isVerticalVideo,
-  required bool canLockOrientation,
 }) {
-  return wasInExternalWindow &&
-      !isInExternalWindow &&
-      playerFullscreen &&
-      hasPendingLandscapeRequest &&
-      !isVerticalVideo &&
-      canLockOrientation;
+  return wasInExternalWindow && !isInExternalWindow && playerFullscreen;
+}
+
+/// 全屏播放方向策略（设置项“全屏方向”）
+enum PlayerFullscreenOrientationPolicy {
+  /// 智能：小屏设备全屏横屏直播自动横屏，大屏跟随系统（历史行为）
+  smart,
+
+  /// 强制横屏：任何设备全屏都尝试横屏（平板锁定竖屏时使用）
+  landscape,
+
+  /// 跟随系统：从不请求方向
+  system,
+}
+
+PlayerFullscreenOrientationPolicy resolvePlayerFullscreenOrientationPolicy(
+  String? value,
+) {
+  switch (value) {
+    case "landscape":
+      return PlayerFullscreenOrientationPolicy.landscape;
+    case "system":
+      return PlayerFullscreenOrientationPolicy.system;
+    default:
+      return PlayerFullscreenOrientationPolicy.smart;
+  }
+}
+
+/// 当前策略下，本次全屏是否应当请求横屏。
+/// [isExternalWindow] 只是语义标注：外部窗口与普通全屏在策略上一致，
+/// 差别由调用方（是否立即请求、是否挂起 pending）决定。
+bool shouldRequestAndroidPlayerLandscape({
+  required PlayerFullscreenOrientationPolicy policy,
+  required bool isVerticalVideo,
+  required bool isExternalWindow,
+  required bool isCompactDisplay,
+}) {
+  if (isVerticalVideo) {
+    return false;
+  }
+  switch (policy) {
+    case PlayerFullscreenOrientationPolicy.system:
+      return false;
+    case PlayerFullscreenOrientationPolicy.landscape:
+      return true;
+    case PlayerFullscreenOrientationPolicy.smart:
+      return isCompactDisplay;
+  }
 }
 
 class _DanmakuReplayEntry {
@@ -554,6 +595,26 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   //final VolumeController volumeController = VolumeController();
 
   /// 初始化一些系统状态
+  /// macOS 沙盒环境探测：media_kit 每次打开媒体都会把播放列表写到
+  /// Directory.systemTemp（TMPDIR 异常时解析为 /tmp），沙盒进程写入失败
+  /// 会被 safe_local_storage 静默吞掉，用户侧表现为所有直播间无法播放。
+  /// 启动时探测一次并给出明确日志，避免这类环境问题只能靠 mpv 间接报错排查。
+  void _probeMediaKitTempDirectory() {
+    try {
+      final probe = File(
+        '${Directory.systemTemp.path}/simple_live_probe_${DateTime.now().millisecondsSinceEpoch}',
+      );
+      probe.writeAsStringSync('probe', flush: true);
+      probe.deleteSync();
+    } catch (e) {
+      Log.w(
+        "macOS 临时目录（${Directory.systemTemp.path}）不可写，"
+        "播放器将无法打开任何媒体：$e。"
+        "若从终端/第三方启动器启动，请检查 TMPDIR 环境变量。",
+      );
+    }
+  }
+
   Future<void> initSystem() async {
     final generation = ++_systemLifecycleGeneration;
     if (Platform.isAndroid) {
@@ -561,6 +622,9 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
     if (_playerClosing || generation != _systemLifecycleGeneration) {
       return;
+    }
+    if (Platform.isMacOS) {
+      _probeMediaKitTempDirectory();
     }
     if (Platform.isAndroid || Platform.isIOS) {
       VolumeController.instance.showSystemUI = false;
@@ -626,14 +690,20 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     }
     fullScreenState.value = true;
     if (Platform.isAndroid || Platform.isIOS) {
+      var androidRequestLandscape = false;
       if (Platform.isAndroid) {
         await _refreshAndroidWindowState();
-        final canLockAndroidOrientation =
-            _shouldUseAndroidPhoneOrientationPolicy();
+        final isCompactDisplay = _shouldUseAndroidPhoneOrientationPolicy();
         final isExternalWindow = isAndroidExternalPlayerWindow(
           inPip: androidInPipState.value,
           inMultiWindow: androidInMultiWindowState.value,
           isFreeform: androidFreeformState.value,
+        );
+        final requestLandscape = shouldRequestAndroidPlayerLandscape(
+          policy: _playerFullscreenOrientationPolicy(),
+          isVerticalVideo: isVertical.value,
+          isExternalWindow: isExternalWindow,
+          isCompactDisplay: isCompactDisplay,
         );
         if (isExternalWindow) {
           // A system freeform/split window owns its bounds. Only switch the
@@ -641,21 +711,14 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
           // OEM freeform windows are only reported as multi-window, but both
           // modes can honour an orientation request. Do not leave a landscape
           // stream trapped in the portrait floating window.
-          _androidLandscapePendingAfterExternalWindow =
-              canLockAndroidOrientation && !isVertical.value;
-          if (shouldRequestLandscapeForAndroidExternalWindow(
-            inPip: androidInPipState.value,
-            inMultiWindow: androidInMultiWindowState.value,
-            isFreeform: androidFreeformState.value,
-            playerFullscreen: fullScreenState.value,
-            isVerticalVideo: isVertical.value,
-            canLockOrientation: canLockAndroidOrientation,
-          )) {
+          _androidLandscapePendingAfterExternalWindow = requestLandscape;
+          if (requestLandscape) {
             await setLandscapeOrientation();
           }
           return;
         }
         _androidLandscapePendingAfterExternalWindow = false;
+        androidRequestLandscape = requestLandscape;
       }
       //全屏
       await SystemChrome.setEnabledSystemUIMode(
@@ -664,7 +727,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       );
       _mobileSystemUiApplied = true;
       if (!isVertical.value &&
-          (!Platform.isAndroid || _shouldUseAndroidPhoneOrientationPolicy())) {
+          (!Platform.isAndroid || androidRequestLandscape)) {
         //横屏
         await setLandscapeOrientation();
       }
@@ -1012,6 +1075,30 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     );
   }
 
+  PlayerFullscreenOrientationPolicy _playerFullscreenOrientationPolicy() {
+    return resolvePlayerFullscreenOrientationPolicy(
+      AppSettingsController.instance.fullscreenOrientation.value,
+    );
+  }
+
+  /// 退出全屏时是否强制回竖屏。
+  /// 手机沿用历史行为（含 OEM 小窗任务的竖屏恢复），大屏交还系统方向策略。
+  bool _shouldForcePortraitOnPlayerExit() {
+    return _playerFullscreenOrientationPolicy() !=
+            PlayerFullscreenOrientationPolicy.system &&
+        _shouldUseAndroidPhoneOrientationPolicy();
+  }
+
+  /// 当前策略下是否允许为全屏播放请求横屏（外部窗口与普通全屏一致）。
+  bool _canRequestAndroidLandscapeForPolicy({required bool isExternalWindow}) {
+    return shouldRequestAndroidPlayerLandscape(
+      policy: _playerFullscreenOrientationPolicy(),
+      isVerticalVideo: isVertical.value,
+      isExternalWindow: isExternalWindow,
+      isCompactDisplay: _shouldUseAndroidPhoneOrientationPolicy(),
+    );
+  }
+
   /// 设置横屏
   Future setLandscapeOrientation() async {
     if (await beforeIOS16()) {
@@ -1046,7 +1133,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       return;
     }
     if (Platform.isAndroid) {
-      if (_shouldUseAndroidPhoneOrientationPolicy()) {
+      if (_shouldForcePortraitOnPlayerExit()) {
         await setPortraitOrientation();
       } else {
         await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
@@ -1255,13 +1342,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     androidInMultiWindowState.value = inMultiWindow;
     androidFreeformState.value = isFreeform;
     unawaited(_syncAndroidExternalWindowLandscapeOrientation());
-    if (shouldRestoreAndroidFullscreenAfterExternalWindowExit(
+    if (shouldRestoreImmersiveAfterExternalWindowExit(
       wasInExternalWindow: wasInExternalWindow,
       isInExternalWindow: isInExternalWindow,
       playerFullscreen: fullScreenState.value,
-      hasPendingLandscapeRequest: _androidLandscapePendingAfterExternalWindow,
-      isVerticalVideo: isVertical.value,
-      canLockOrientation: _shouldUseAndroidPhoneOrientationPolicy(),
     )) {
       unawaited(_restoreAndroidFullscreenAfterExternalWindowExit());
     }
@@ -1283,7 +1367,9 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
           isFreeform: androidFreeformState.value,
           playerFullscreen: fullScreenState.value,
           isVerticalVideo: isVertical.value,
-          canLockOrientation: _shouldUseAndroidPhoneOrientationPolicy(),
+          canLockOrientation: _canRequestAndroidLandscapeForPolicy(
+            isExternalWindow: true,
+          ),
         )) {
       return;
     }
@@ -1303,9 +1389,6 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     if (!Platform.isAndroid ||
         token != _androidExternalWindowExitGeneration ||
         !fullScreenState.value ||
-        isVertical.value ||
-        !_shouldUseAndroidPhoneOrientationPolicy() ||
-        !_androidLandscapePendingAfterExternalWindow ||
         isAndroidExternalPlayerWindow(
           inPip: androidInPipState.value,
           inMultiWindow: androidInMultiWindowState.value,
@@ -1313,16 +1396,26 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
         )) {
       return;
     }
+    final restoreImmersive = !_mobileSystemUiApplied;
+    final restoreLandscape = _androidLandscapePendingAfterExternalWindow &&
+        _canRequestAndroidLandscapeForPolicy(isExternalWindow: false);
+    if (!restoreImmersive && !restoreLandscape) {
+      return;
+    }
     try {
-      await SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.manual,
-        overlays: [],
-      );
-      _mobileSystemUiApplied = true;
-      await setLandscapeOrientation();
+      if (restoreImmersive) {
+        await SystemChrome.setEnabledSystemUIMode(
+          SystemUiMode.manual,
+          overlays: [],
+        );
+        _mobileSystemUiApplied = true;
+      }
+      if (restoreLandscape) {
+        await setLandscapeOrientation();
+      }
       _androidLandscapePendingAfterExternalWindow = false;
     } catch (e) {
-      Log.d("系统小窗展开后恢复横屏失败: $e");
+      Log.d("系统小窗展开后恢复全屏失败: $e");
     }
   }
 
@@ -1819,6 +1912,11 @@ class PlayerController extends BaseController
 
   /// Serializes every media open so a stale recovery cannot finish after a
   /// newer room open and replace its media.
+  /// 单次 open 的最长等待。渲染管线挂死时 player.open 可能永不完成，
+  /// 所有恢复路径又串行排在同一个 open 后面，超时后强制放行，
+  /// 让下一路恢复（或换台）能继续推进，避免页面永久卡死。
+  static const _playbackOpenTimeout = Duration(seconds: 20);
+
   Future<bool> openPlaybackMedia(
     Media media, {
     required int loadGeneration,
@@ -1838,7 +1936,15 @@ class PlayerController extends BaseController
         break;
       }
       try {
-        await activeOpen;
+        await activeOpen.timeout(_playbackOpenTimeout);
+      } on TimeoutException {
+        Log.e(
+          "等待旧媒体打开超时(${_playbackOpenTimeout.inSeconds}s)，强制接管打开流程",
+          StackTrace.current,
+        );
+        if (identical(_playbackOpenFuture, activeOpen)) {
+          _playbackOpenFuture = null;
+        }
       } catch (e, stackTrace) {
         Log.e("等待旧媒体打开失败: $e", stackTrace);
       }
@@ -1856,12 +1962,19 @@ class PlayerController extends BaseController
     final opening = Future<void>.microtask(() => player.open(media));
     _playbackOpenFuture = opening;
     try {
-      await opening;
+      await opening.timeout(_playbackOpenTimeout);
       return _isPlaybackOwnerCurrent(
         loadGeneration,
         mediaGeneration,
         isStillOwner,
       );
+    } on TimeoutException {
+      Log.e(
+        "打开媒体超时(${_playbackOpenTimeout.inSeconds}s)，放弃等待"
+        "（渲染管线可能已挂死）",
+        StackTrace.current,
+      );
+      return false;
     } finally {
       if (identical(_playbackOpenFuture, opening)) {
         _playbackOpenFuture = null;
@@ -2185,14 +2298,17 @@ class PlayerController extends BaseController
     });
     _logSubscription = player.stream.log.listen((event) {
       Log.d("播放器日志：$event");
+      _trackVideoDecodeError(event);
     });
     _widthSubscription = player.stream.width.listen((event) {
       Log.d(
           'width:$event  W:${(player.state.width)}  H:${(player.state.height)}');
 
       // Fix Issue #57: 检测异常的视频尺寸
+      // Windows 上纹理重建期间 width 会短暂为 null，此时触发恢复
+      // 会撞上渲染上下文初始化的竞态（回前台整窗冻结），仅非 Windows 生效
       if (event == null || event <= 0) {
-        if (player.state.playing) {
+        if (player.state.playing && !Platform.isWindows) {
           Log.w("播放器宽度异常: $event (播放中)，可能是Surface失效");
           unawaited(_handleInvalidVideoSize());
         }
@@ -2208,9 +2324,9 @@ class PlayerController extends BaseController
       Log.d(
           'height:$event  W:${(player.state.width)}  H:${(player.state.height)}');
 
-      // Fix Issue #57: 检测异常的视频尺寸
+      // Fix Issue #57: 检测异常的视频尺寸（Windows 排除，同上）
       if (event == null || event <= 0) {
-        if (player.state.playing) {
+        if (player.state.playing && !Platform.isWindows) {
           Log.w("播放器高度异常: $event (播放中)，可能是Surface失效");
           unawaited(_handleInvalidVideoSize());
         }
@@ -2401,6 +2517,63 @@ class PlayerController extends BaseController
 
   // Fix Issue #57 & #97: 处理异常的视频尺寸（Surface失效）。
   // Recovery is bounded and serialized so startup events cannot storm the decoder.
+  Future<int?> readVideoOutputDropCount() async {
+    if (!Platform.isAndroid || player.platform is! NativePlayer) {
+      return null;
+    }
+    try {
+      final value = await (player.platform as NativePlayer)
+          .getProperty('frame-drop-count');
+      return int.tryParse(value.trim());
+    } catch (e) {
+      Log.d("读取 mpv 输出丢帧数失败: $e", false);
+      return null;
+    }
+  }
+
+  /// 黑屏判据（音频时钟在走但视频不渲染，位置看门狗看不见）：
+  /// mpv 的 vd（视频解码器）持续报 error 说明解码管线已挂，
+  /// 按窗口计数超阈值即交由 onVideoDecodeStall 走停滞恢复链。
+  /// 阈值取 15 次/30 秒：正常流偶尔的解码毛刺到不了这个量级，
+  /// 而 25fps 的死视频轨约 1 秒就能报够。
+  final List<DateTime> _videoDecodeErrorTimes = [];
+  DateTime? _lastVideoDecodeStallAt;
+  static const int _videoDecodeErrorThreshold = 15;
+  static const Duration _videoDecodeErrorWindow = Duration(seconds: 30);
+  static const Duration _videoDecodeStallCooldown = Duration(seconds: 30);
+
+  void _trackVideoDecodeError(PlayerLog event) {
+    if (event.prefix != "vd" || event.level != "error") {
+      return;
+    }
+    if (!player.state.playing || player.state.completed) {
+      return;
+    }
+    final now = DateTime.now();
+    _videoDecodeErrorTimes.add(now);
+    _videoDecodeErrorTimes.removeWhere(
+      (t) => t.isBefore(now.subtract(_videoDecodeErrorWindow)),
+    );
+    if (_videoDecodeErrorTimes.length < _videoDecodeErrorThreshold) {
+      return;
+    }
+    if (_lastVideoDecodeStallAt != null &&
+        now.difference(_lastVideoDecodeStallAt!) < _videoDecodeStallCooldown) {
+      return;
+    }
+    _lastVideoDecodeStallAt = now;
+    _videoDecodeErrorTimes.clear();
+    Log.w(
+      "${_videoDecodeErrorWindow.inSeconds}秒内视频解码错误达"
+      "$_videoDecodeErrorThreshold 次，判定画面停滞",
+    );
+    onVideoDecodeStall();
+  }
+
+  /// 画面停滞回调（声音正常但视频解码持续失败），由 LiveRoomController
+  /// 接入停滞恢复链（重刷→风暴记账→自动换台）
+  void onVideoDecodeStall() {}
+
   Future<void> _handleInvalidVideoSize() async {
     final generation = playbackLoadGeneration;
     final mediaGeneration = playbackMediaGeneration;
@@ -2684,17 +2857,21 @@ class PlayerController extends BaseController
         : (player.state.playing
             ? BackgroundPlaybackState.playing
             : BackgroundPlaybackState.paused);
+    final requestAudioFocus =
+        !AppSettingsController.instance.allowConcurrentAudio.value;
     if (service.isRunning) {
       await service.update(
         state: state,
         title: playbackTitle,
         subtitle: playbackSubtitle,
+        requestAudioFocus: requestAudioFocus,
       );
     } else {
       await service.start(
         state: state,
         title: playbackTitle,
         subtitle: playbackSubtitle,
+        requestAudioFocus: requestAudioFocus,
       );
     }
   }
@@ -2729,6 +2906,9 @@ class PlayerController extends BaseController
       return;
     }
     if (event.type == 'audioFocus') {
+      // 开启“与其他应用同时播放”后不再让出焦点：即使收到丢失回调也继续播放。
+      final allowConcurrent =
+          AppSettingsController.instance.allowConcurrentAudio.value;
       switch (event.focusState) {
         case 'gain':
           await _applyResolvedPlayerVolume();
@@ -2738,6 +2918,9 @@ class PlayerController extends BaseController
           break;
         case 'loss':
         case 'loss_transient':
+          if (allowConcurrent) {
+            break;
+          }
           await player.pause();
           break;
         case 'can_duck':

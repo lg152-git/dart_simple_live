@@ -197,8 +197,7 @@ class LiveRoomPage extends GetView<LiveRoomController> {
                     AppStyle.vGap12,
                     Obx(
                       () => Text(
-                        AppSettingsController
-                                .instance.okKeyTriggersPlayPause
+                        AppSettingsController.instance.okKeyTriggersPlayPause
                             ? "已暂停 · 按OK键或播放键继续"
                             : "已暂停 · 按播放键继续",
                         style: AppStyle.textStyleWhite,
@@ -212,8 +211,10 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         ),
         Obx(
           () => Visibility(
-            visible:
-                !controller.liveStatus.value && !controller.pageLoadding.value,
+            visible: !controller.liveStatus.value &&
+                !controller.pageLoadding.value &&
+                // 进房失败（房间被封禁等）时由下方错误页接管，不再叠加“未开播”
+                controller.playbackLoadError.value.isEmpty,
             child: Center(
               child: Text(
                 "未开播",
