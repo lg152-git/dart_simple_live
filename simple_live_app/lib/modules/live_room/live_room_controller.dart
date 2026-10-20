@@ -92,6 +92,9 @@ class LiveRoomController extends PlayerController
 
   Rx<LiveRoomDetail?> detail = Rx<LiveRoomDetail?>(null);
   var online = 0.obs;
+
+  /// 累计观看人数（目前仅抖音弹幕提供，其余平台为 0 不显示）
+  var totalViewers = 0.obs;
   var followed = false.obs;
   var liveStatus = false.obs;
   RxList<LiveSuperChatMessage> superChats = RxList<LiveSuperChatMessage>();
@@ -1647,6 +1650,10 @@ class LiveRoomController extends PlayerController
     } else if (msg.type == LiveMessageType.online) {
       // 只保留 HTTP 轮询的“正在观看”数值（room_view_stats.display_value），
       // 不再被 WebSocket 推送的 totalUser 覆盖，避免数值在两个口径间交替跳变。
+      // 累计观看人数是独立指标（目前仅抖音提供），不受上述定制影响。
+      if (msg.totalViews != null) {
+        totalViewers.value = msg.totalViews!;
+      }
     } else if (msg.type == LiveMessageType.superChat) {
       if (msg.data is! LiveSuperChatMessage) {
         return;
@@ -1805,6 +1812,7 @@ class LiveRoomController extends PlayerController
       // 刷新关注状态
       followed.value = DBService.instance.getFollowExist("${site.id}_$roomId");
       online.value = detail.value!.online;
+      totalViewers.value = 0;
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
       _restartSuperChatRefreshTimer();
       _restartOnlineRefreshTimer();
