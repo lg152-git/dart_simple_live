@@ -57,8 +57,16 @@ jobs:
           }
 
       - name: Install flutter_distributor
-        shell: bash
-        run: dart pub global activate flutter_distributor
+        shell: pwsh
+        run: |
+          dart pub global activate flutter_distributor
+          # 把 Dart 全局 bin 目录加入 PATH（GitHub 上为 $env:LOCALAPPDATA\Pub\cache\bin）。
+          # flutter_distributor 装完后可执行文件位于该目录，bash step 不继承此路径，
+          # 通过 GITHUB_PATH 注入，后续所有步骤可直呼 flutter_distributor。
+          $pubBin = "$env:LOCALAPPDATA\Pub\cache\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $pubBin
+          Write-Host "Added to PATH: $pubBin"
+          Get-ChildItem $pubBin -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: Restore packages
         shell: bash
