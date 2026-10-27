@@ -116,6 +116,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {
+    // Shortcut keys are consumed before TranslateMessage so the IME never
+    // turns them into composition input.
+    if (window.PreTranslateShortcutMessage(msg)) {
+      continue;
+    }
     ::TranslateMessage(&msg);
     ::DispatchMessage(&msg);
   }
@@ -129,5 +134,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
     ::CloseHandle(primary_instance_mutex);
   }
+  // The window and the Flutter engine are already destroyed here. Terminate
+  // directly instead of returning: a normal exit runs DLL_PROCESS_DETACH for
+  // every loaded module, and third-party IME modules injected into the process
+  // (e.g. SogouPY.ime) can crash there, showing "Unknown Hard Error" on close.
+  ::TerminateProcess(::GetCurrentProcess(), EXIT_SUCCESS);
   return EXIT_SUCCESS;
 }
