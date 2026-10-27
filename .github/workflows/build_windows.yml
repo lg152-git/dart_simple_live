@@ -83,8 +83,16 @@ jobs:
       - name: Package MSIX + Inno Setup installer
         shell: bash
         run: |
+          # dart pub global 在 Windows 上生成的 shim 是 .bat（flutter_distributor.bat）。
+          # Git Bash 直呼 "flutter_distributor" 找不到无扩展名命令，这里用完整 .bat 路径调用。
+          PUB_BIN="$LOCALAPPDATA/Pub/Cache/bin"
+          DIST="$PUB_BIN/flutter_distributor.bat"
+          if [[ ! -f "$DIST" ]]; then
+            echo "flutter_distributor.bat not found at $DIST" >&2
+            exit 1
+          fi
           cd simple_live_app
-          flutter_distributor package --platform windows --targets msix,zip --skip-clean
+          "$DIST" package --platform windows --targets msix,zip --skip-clean
           echo "--- build/dist output ---"
           find build/dist -type f | sort
 
