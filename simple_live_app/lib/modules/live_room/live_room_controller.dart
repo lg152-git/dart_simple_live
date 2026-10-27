@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 
@@ -3943,6 +3943,53 @@ ${errorStackTrace ?? ""}''');
       }
       _lastWatchdogPosition = position;
     });
+  }
+
+  Future<void> _sampleAndroidVideoOutputDrops() async {
+    try {
+      final dropCount = await readVideoOutputDropCount();
+      if (!liveStatus.value ||
+          isBackground ||
+          !player.state.playing ||
+          dropCount == null ||
+          dropCount < 0) {
+        _lastVideoOutputDropCount = null;
+        _videoOutputDropSamples = 0;
+        return;
+      }
+      final previous = _lastVideoOutputDropCount;
+      _lastVideoOutputDropCount = dropCount;
+      if (previous == null || dropCount < previous) {
+        _videoOutputDropSamples = 0;
+        return;
+      }
+      final dropped = dropCount - previous;
+      if (dropped >= 25) {
+        _videoOutputDropSamples++;
+        Log.d("Android 视频输出窗口丢帧 $dropped（连续 $_videoOutputDropSamples/3）");
+      } else {
+        _videoOutputDropSamples = 0;
+      }
+      if (_videoOutputDropSamples >= 3 &&
+          !_watchdogRefreshing &&
+          (_lastWatchdogRefreshAt == null ||
+              DateTime.now().difference(_lastWatchdogRefreshAt!) >=
+                  const Duration(seconds: 8))) {
+        _videoOutputDropSamples = 0;
+        Log.w("Android 视频输出连续丢帧，触发播放恢复");
+        _watchdogRefreshing = true;
+        _lastWatchdogRefreshAt = DateTime.now();
+        unawaited(_refreshPlayerFromWatchdog().whenComplete(() {
+          _watchdogRefreshing = false;
+        }));
+      }
+    } catch (e, stackTrace) {
+      Log.e("采样 Android 视频输出丢帧数失败: $e", stackTrace);
+      _lastVideoOutputDropCount = null;
+      _videoOutputDropSamples = 0;
+    } finally {
+      _outputDropSamplePending = false;
+    }
   }
 
   Future<void> _refreshPlayerFromWatchdog() async {
