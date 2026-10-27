@@ -19,7 +19,9 @@ param(
     [switch]$DryRun
 )
 
-$ErrorActionPreference = "Stop"
+# PS 5.1 turns native-command stderr into a terminating error under "Stop"; every git call
+# here checks $LASTEXITCODE itself, so "Continue" is the correct mode.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
