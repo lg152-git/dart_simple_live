@@ -1,0 +1,110 @@
+name: build-windows
+
+# 每次运行都以 main 分支最新一次 commit 为源码构建 Windows 桌面分发包。
+# 仅手动触发（workflow_dispatch）：默认构建 main 最新 commit，也可指定其它 ref，不随 push 自动运行。
+# 产物：MSIX + Inno Setup 可执行安装器（zip 分发包）。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要检出的 Git ref（默认 main，即 main 分支最新一次 commit）"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      # 始终检出 main 分支的最新 commit（手动触发未填 ref 时回退为 main）
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          fetch-depth: 0
+
+      - name: Show build commit
+        id: commit_info
+        shell: bash
+        run: |
+          echo "===== 源码信息 ====="
+          git log -1 --format="commit: %H%nshort:  %h%nauthor: %an <%ae>%ndate:   %ad%nsubject: %s"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.41.9"
+          cache: true
+
+      - name: Ensure Inno Setup 6
+        shell: pwsh
+        run: |
+          $defaultDir = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $regKey = "HKLM:\SOFTWARE\WOW6432Node\Inno Setup 6"
+          if ((Test-Path $defaultDir) -or (Test-Path $regKey)) {
+            Write-Host "Inno Setup 6 already available, skipping install."
+          } else {
+            Write-Host "Installing Inno Setup 6 from official site ..."
+            curl.exe -L -o inno-setup.exe "https://jrsoftware.org/download.php/is.exe"
+            Start-Process -FilePath .\inno-setup.exe -ArgumentList "/SILENT" -Wait
+            if (Test-Path $defaultDir) {
+              Write-Host "Inno Setup 6 installed to $defaultDir"
+            } else {
+              Write-Host "Inno Setup 6 installation may have failed, continuing; inno target will report error."
+            }
+          }
+
+      - name: Install flutter_distributor
+        shell: bash
+        run: dart pub global activate flutter_distributor
+
+      - name: Restore packages
+        shell: bash
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      - name: Build Windows (release)
+        shell: bash
+        run: |
+          cd simple_live_app
+          flutter build windows --release
+
+      - name: Package MSIX + Inno Setup installer
+        shell: bash
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform windows --targets msix,zip --skip-clean
+          echo "--- build/dist output ---"
+          find build/dist -type f | sort
+
+      - name: Rename installer ZIP to conventional name
+        shell: pwsh
+        run: |
+          $root = "D:\a\flutter\flutter\simple_live_app\build\dist"
+          $installer = Get-ChildItem -Path $root -Recurse -Filter "SimpleLive*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($installer) {
+            Copy-Item $installer.FullName (Join-Path $root "SimpleLive-Windows-Setup.exe") -Force
+            Write-Host "Installer ready: SimpleLive-Windows-Setup.exe"
+          } else {
+            Write-Warning "No Inno installer .exe found in build/dist (Inno target may have skipped); msix still uploaded."
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ steps.commit_info.outputs.short_sha }}
+          path: |
+            simple_live_app/build/dist/**/*.msix
+            simple_live_app/build/dist/SimpleLive-Windows-Setup.exe
+            simple_live_app/build/dist/**/*.exe
+          if-no-files-found: warn
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "🪟 Windows packages built from main tip: ${{ steps.commit_info.outputs.short_sha }}"
+          echo "MSIX: 需 Windows 10/11 侧载安装（未签名，可安装）"
+          echo "Inno 安装器: 双击 SimpleLive-Windows-Setup.exe 安装"
