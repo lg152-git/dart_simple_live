@@ -1,8 +1,9 @@
 name: build-windows
 
-# 每次运行都以 main 分支最新一次 commit 为源码构建 Windows 桌面分发包。
+# 每次运行都以 main 分支最新一次 commit 为源码构建 Windows 桌面绿色分发包（zip）。
 # 仅手动触发（workflow_dispatch）：默认构建 main 最新 commit，也可指定其它 ref，不随 push 自动运行。
-# 产物：MSIX + Inno Setup 可执行安装器（zip 分发包）。
+# 产物：build\windows\x64\runner\Release\ 整目录打包为 zip，解压后直接运行 simple_live_app.exe。
+# 不产出 MSIX（未签名无法安装），也不做 Inno 安装器。
 on:
   workflow_dispatch:
     inputs:
@@ -38,36 +39,6 @@ jobs:
           flutter-version: "3.41.9"
           cache: true
 
-      - name: Ensure Inno Setup 6
-        shell: pwsh
-        run: |
-          $defaultDir = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          $regKey = "HKLM:\SOFTWARE\WOW6432Node\Inno Setup 6"
-          if ((Test-Path $defaultDir) -or (Test-Path $regKey)) {
-            Write-Host "Inno Setup 6 already available, skipping install."
-          } else {
-            Write-Host "Installing Inno Setup 6 from official site ..."
-            curl.exe -L -o inno-setup.exe "https://jrsoftware.org/download.php/is.exe"
-            Start-Process -FilePath .\inno-setup.exe -ArgumentList "/SILENT" -Wait
-            if (Test-Path $defaultDir) {
-              Write-Host "Inno Setup 6 installed to $defaultDir"
-            } else {
-              Write-Host "Inno Setup 6 installation may have failed, continuing; inno target will report error."
-            }
-          }
-
-      - name: Install flutter_distributor
-        shell: pwsh
-        run: |
-          dart pub global activate flutter_distributor
-          # 把 Dart 全局 bin 目录加入 PATH（GitHub 上为 $env:LOCALAPPDATA\Pub\cache\bin）。
-          # flutter_distributor 装完后可执行文件位于该目录，bash step 不继承此路径，
-          # 通过 GITHUB_PATH 注入，后续所有步骤可直呼 flutter_distributor。
-          $pubBin = "$env:LOCALAPPDATA\Pub\cache\bin"
-          Add-Content -Path $env:GITHUB_PATH -Value $pubBin
-          Write-Host "Added to PATH: $pubBin"
-          Get-ChildItem $pubBin -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
-
       - name: Restore packages
         shell: bash
         run: |
@@ -80,47 +51,33 @@ jobs:
           cd simple_live_app
           flutter build windows --release
 
-      - name: Package MSIX + Inno Setup installer
-        shell: bash
-        run: |
-          # dart pub global 在 Windows 上生成的 shim 是 .bat（flutter_distributor.bat）。
-          # Git Bash 直呼 "flutter_distributor" 找不到无扩展名命令，这里用完整 .bat 路径调用。
-          PUB_BIN="$LOCALAPPDATA/Pub/Cache/bin"
-          DIST="$PUB_BIN/flutter_distributor.bat"
-          if [[ ! -f "$DIST" ]]; then
-            echo "flutter_distributor.bat not found at $DIST" >&2
-            exit 1
-          fi
-          cd simple_live_app
-          "$DIST" package --platform windows --targets msix,zip --skip-clean
-          echo "--- build/dist output ---"
-          find build/dist -type f | sort
-
-      - name: Rename installer ZIP to conventional name
+      - name: Package portable ZIP
         shell: pwsh
         run: |
-          $root = "D:\a\flutter\flutter\simple_live_app\build\dist"
-          $installer = Get-ChildItem -Path $root -Recurse -Filter "SimpleLive*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($installer) {
-            Copy-Item $installer.FullName (Join-Path $root "SimpleLive-Windows-Setup.exe") -Force
-            Write-Host "Installer ready: SimpleLive-Windows-Setup.exe"
-          } else {
-            Write-Warning "No Inno installer .exe found in build/dist (Inno target may have skipped); msix still uploaded."
+          # 把 flutter build windows 产出的 Release 目录整体打 zip，解压即用。
+          $relDir = "D:\a\flutter\flutter\simple_live_app\build\windows\x64\runner\Release"
+          $sha = "${{ steps.commit_info.outputs.short_sha }}"
+          if (-not (Test-Path $relDir)) {
+            throw "Release output dir not found: $relDir"
           }
+          $exe = Get-ChildItem $relDir -Filter "simple_live_app.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Warning "simple_live_app.exe not found in $relDir" }
+          $zipName = "simple_live_app-windows-$sha.zip"
+          $zipPath = Join-Path "D:\a\flutter\flutter" $zipName
+          Compress-Archive -Path "$relDir\*" -DestinationPath $zipPath -Force
+          "zip ready: $zipName" | Out-File "D:\a\flutter\flutter\windows_zip_name.txt" -Encoding utf8
+          Write-Host "=== zip contents (top) ==="
+          Get-ChildItem $relDir | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,2)}}
 
-      - name: Upload artifacts
+      - name: Upload ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-${{ steps.commit_info.outputs.short_sha }}
-          path: |
-            simple_live_app/build/dist/**/*.msix
-            simple_live_app/build/dist/SimpleLive-Windows-Setup.exe
-            simple_live_app/build/dist/**/*.exe
-          if-no-files-found: warn
+          path: D:\a\flutter\flutter\simple_live_app-windows-${{ steps.commit_info.outputs.short_sha }}.zip
+          if-no-files-found: error
 
       - name: Summary
         shell: bash
         run: |
-          echo "🪟 Windows packages built from main tip: ${{ steps.commit_info.outputs.short_sha }}"
-          echo "MSIX: 需 Windows 10/11 侧载安装（未签名，可安装）"
-          echo "Inno 安装器: 双击 SimpleLive-Windows-Setup.exe 安装"
+          echo "🪟 Windows portable zip built from main tip: ${{ steps.commit_info.outputs.short_sha }}"
+          echo "解压后直接运行 simple_live_app.exe，无需安装、无需签名。"
